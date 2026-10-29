@@ -3,7 +3,12 @@ import time
 import requests
 from pathlib import Path
 import os
+import subprocess
+import urllib.request
+import urllib.error
 from collections import defaultdict
+from datetime import datetime, timezone
+from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -253,6 +258,358 @@ def check_clan_bank(cache):
     save_cache(cache)
 
 
+def ensure_chrome_running():
+    debug_url = "http://127.0.0.1:9222/json/version"
+
+    # Reuse Chrome if its debugging endpoint is already available.
+    try:
+        with urllib.request.urlopen(debug_url, timeout=2) as response:
+            if response.status == 200:
+                print("Chrome debugging endpoint is available.")
+                return
+    except (urllib.error.URLError, TimeoutError, OSError):
+        pass
+
+    print("Chrome is not available. Launching Koruxa browser...")
+
+    profile_dir = os.path.expanduser("~/.koruxa-bot-chrome")
+
+    subprocess.Popen(
+        [
+            "google-chrome-stable",
+            "--remote-debugging-port=9222",
+            f"--user-data-dir={profile_dir}",
+            "https://koruxa.com/",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    # Wait for Chrome's debugging endpoint to become available.
+    for _ in range(30):
+        try:
+            with urllib.request.urlopen(debug_url, timeout=2) as response:
+                if response.status == 200:
+                    print("Chrome started successfully.")
+                    return
+        except (urllib.error.URLError, TimeoutError, OSError):
+            time.sleep(1)
+
+    raise RuntimeError(
+        "Chrome failed to start or debugging port 9222 "
+        "did not become available within 30 seconds."
+    )
+
+
+def connect_koruxa_browser(playwright):
+    browser = playwright.chromium.connect_over_cdp(CHROME_CDP_URL)
+
+    for context in browser.contexts:
+        for page in context.pages:
+            if page.url.startswith("https://koruxa.com/") and not page.is_closed():
+                return browser, page
+
+    raise RuntimeError("No open Koruxa tab found in the connected Chrome.")
+
+
+def fetch_player_data(page):
+    result = page.evaluate(
+        """
+        async (url) => {
+            const response = await fetch(url, {
+                method: "GET",
+                credentials: "include",
+                headers: {
+                    "Accept": "application/json"
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(
+                    `Player API returned HTTP ${response.status}`
+                );
+            }
+
+            return await response.json();
+        }
+    """,
+        PRIV_PLAYER_API_URL,
+    )
+
+    if not isinstance(result, dict):
+        raise RuntimeError("Invalid player API response")
+
+    return result
+
+
+def utc_time(value):
+    if not value:
+        return "unknown"
+
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    except (ValueError, AttributeError):
+        return str(value)
+
+
+def buff_key(buff):
+    # Exclude seconds_left: it changes on every poll.
+    return (
+        str(buff.get("buff_type", "unknown")),
+        buff.get("buff_value"),
+        buff.get("expires_at"),
+        buff.get("activated_by_name"),
+    )
+
+
+def buff_label(buff):
+    labels = {
+        "xp_boost": "XP Boost",
+        "speed_boost": "Speed Boost",
+    }
+
+    kind = buff.get("buff_type", "unknown")
+    label = labels.get(kind, kind.replace("_", " ").title())
+    value = buff.get("buff_value")
+
+    if value is not None:
+        label += f" +{value}%"
+
+    return label
+
+
+def process_global_buffs(data, cache):
+    buffs = data.get("global_buffs") or []
+
+    if not isinstance(buffs, list):
+        return
+
+    current = {
+        json.dumps(buff_key(buff), sort_keys=True): buff
+        for buff in buffs
+        if isinstance(buff, dict)
+    }
+
+    previous = cache.get("global_buffs")
+
+    # First run: save the current state without announcements.
+    if previous is None:
+        cache["global_buffs"] = current
+        return
+
+    # Announce new or changed buffs.
+    for key, buff in current.items():
+        old = previous.get(key)
+
+        if old is not None:
+            continue
+
+        message = (
+            f"🌍 **Global buff active: {buff_label(buff)}**\n"
+            f"Expires: {utc_time(buff.get('expires_at'))}\n"
+            f"Activated by: "
+            f"{buff.get('activated_by_name') or 'Unknown'}"
+        )
+        send_discord(message, GREEN, webhook=EVENTS_WEBHOOK)
+
+    # Announce buffs that disappeared.
+    for key, buff in previous.items():
+        if key in current:
+            continue
+
+        send_discord(
+            f"🌍 **Global buff ended or removed:** " f"{buff_label(buff)}",
+            YELLOW,
+            webhook=EVENTS_WEBHOOK,
+        )
+
+    cache["global_buffs"] = current
+
+
+def skill_event_key(event):
+    if not isinstance(event, dict) or not event:
+        return None
+
+    # Ignore countdown fields, which naturally change each poll.
+    return {
+        "id": event.get("id"),
+        "flavor": event.get("flavor"),
+        "node_label": event.get("node_label"),
+        "skill": event.get("skill"),
+        "state": event.get("state"),
+        "shield_max": event.get("shield_max"),
+    }
+
+
+def format_skill_event(event):
+    skill = (event.get("skill") or "unknown").replace("_", " ").title()
+    name = event.get("flavor") or "Skill Event"
+    target = event.get("node_label") or "Unknown target"
+
+    seconds = event.get("seconds_left")
+    time_left = ""
+
+    if isinstance(seconds, (int, float)):
+        minutes = max(0, int(seconds)) // 60
+        time_left = f"\nTime remaining: {minutes}m"
+
+    shield_hp = event.get("shield_hp")
+    shield_max = event.get("shield_max")
+
+    shield = ""
+    if shield_hp is not None and shield_max is not None:
+        shield = f"\nShield: {shield_hp:,} / {shield_max:,} HP"
+
+    return (
+        f"⚔️ **{name}**\n" f"Skill: {skill} · Target: {target}" f"{time_left}{shield}"
+    )
+
+
+def process_skill_event(data, cache):
+    event = data.get("skill_event") or {}
+
+    if not isinstance(event, dict):
+        event = {}
+
+    current = skill_event_key(event)
+    previous = cache.get("skill_event")
+
+    # First run: establish baseline.
+    if "skill_event" not in cache:
+        cache["skill_event"] = current
+        return
+
+    if current == previous:
+        return
+
+    if current is None:
+        if previous is not None:
+            send_discord(
+                "⚔️ **Skill event ended or is no longer active.**",
+                YELLOW,
+                webhook=EVENTS_WEBHOOK,
+            )
+
+    elif previous is None:
+        send_discord(
+            "⚔️ **Skill event detected!**\n" + format_skill_event(event),
+            GREEN,
+            webhook=EVENTS_WEBHOOK,
+        )
+
+    else:
+        send_discord(
+            "⚔️ **Skill event changed!**\n" + format_skill_event(event),
+            GREEN,
+            webhook=EVENTS_WEBHOOK,
+        )
+
+    cache["skill_event"] = current
+
+
+def fetch_clan_boss(page):
+    result = page.evaluate(
+        """
+        async (url) => {
+            const response = await fetch(url, {
+                method: "GET",
+                credentials: "include",
+                headers: {
+                    "Accept": "application/json"
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(
+                    `Clan boss API returned HTTP ${response.status}`
+                );
+            }
+
+            return await response.json();
+        }
+    """,
+        PRIV_CLAN_BOSS_API_URL,
+    )
+
+    if not isinstance(result, dict):
+        raise RuntimeError("Invalid clan boss API response")
+
+    return result
+
+
+def format_duration(seconds):
+    seconds = max(0, int(seconds or 0))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def process_clan_boss(data, cache):
+    boss = data.get("boss") or {}
+    phase = data.get("phase") or {}
+
+    if not isinstance(boss, dict) or not isinstance(phase, dict):
+        return
+
+    state = phase.get("state")
+    previous = cache.get("clan_boss_phase", "__missing__")
+
+    if state != "active":
+        # Remember that the active phase has ended. This allows
+        # the next active phase to trigger a notification.
+        cache["clan_boss_phase"] = None
+        return
+
+    signature = {
+        "state": phase.get("state"),
+        "started": phase.get("started"),
+        "window": phase.get("window"),
+        "tier": boss.get("tier"),
+        "name": boss.get("name", "Clan Boss"),
+    }
+
+    # First run: establish a baseline without announcing an
+    # already-running boss.
+    if previous == "__missing__":
+        cache["clan_boss_phase"] = signature
+        return
+
+    if previous == signature:
+        return
+
+    current_hp = boss.get("current_hp")
+    max_hp = boss.get("max_hp")
+    tier = signature["tier"]
+    name = signature["name"]
+    reset_in = data.get("reset_in")
+
+    lines = [
+        f"⚔️ **{name} — Tier {tier}**",
+        "",
+    ]
+
+    if current_hp is not None and max_hp is not None:
+        lines.append(f"**HP:** {current_hp:,} / {max_hp:,}")
+
+    if reset_in is not None:
+        lines.append(f"**Window resets in:** {format_duration(reset_in)}")
+
+    send_discord(
+        "\n".join(lines),
+        GREEN,
+        webhook=EVENTS_WEBHOOK,
+    )
+
+    cache["clan_boss_phase"] = signature
+
+
 def main():
     print("Koruxa watcher started.")
     print(f"Clan bank API: {PUB_CLAN_BANK_API_URL}")
@@ -260,21 +617,37 @@ def main():
     print(f"Polling every {POLL_INTERVAL} seconds.")
 
     cache = load_cache()
+    browser = None
+    page = None
 
-    while True:
-        try:
-            check_clan_bank(cache)
+    with sync_playwright() as playwright:
+        while True:
+            try:
+                if browser is None or page is None or page.is_closed():
+                    ensure_chrome_running()
+                    browser, page = connect_koruxa_browser(playwright)
+                    print("Connected to authenticated Koruxa tab.")
 
-        except requests.RequestException as e:
-            print(f"[ERROR] Request failed: {e}")
+                check_clan_bank(cache)
 
-        except (ValueError, RuntimeError) as e:
-            print(f"[ERROR] API error: {e}")
+                data = fetch_player_data(page)
+                process_global_buffs(data, cache)
+                process_skill_event(data, cache)
 
-        except Exception as e:
-            print(f"[ERROR] Unexpected error: {e}")
+                boss_data = fetch_clan_boss(page)
+                process_clan_boss(boss_data, cache)
 
-        time.sleep(POLL_INTERVAL)
+                save_cache(cache)
+
+            except requests.RequestException as e:
+                print(f"[ERROR] Clan bank request failed: {e}")
+
+            except Exception as e:
+                print(f"[ERROR] Watcher error: {e}")
+                browser = None
+                page = None
+
+            time.sleep(POLL_INTERVAL)
 
 
 if __name__ == "__main__":
