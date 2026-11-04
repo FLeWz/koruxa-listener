@@ -32,7 +32,7 @@ class SkillEventService(BaseService):
 
         return (
             f"⚔️ **{name}**\n"
-            f"{skill} · {target}"
+            f"{self.mention(skill)} · {target}"
             f"{time_left}"
         )
 

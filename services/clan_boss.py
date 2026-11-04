@@ -58,6 +58,7 @@ class ClanBossService(BaseService):
         max_hp = boss.get("max_hp")
 
         lines = [
+            self.mention("ClanBoss"),
             f"⚔️ **{signature['name']} — " f"Tier {signature['tier']}**",
             "",
         ]

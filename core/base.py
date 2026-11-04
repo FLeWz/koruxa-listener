@@ -31,6 +31,15 @@ class BaseService:
         response.raise_for_status()
         return response
 
+    def mention(self, role):
+        key = str(role).replace(" ", "").replace("_", "").lower()
+        role_id = self.config.role_ids.get(key)
+
+        if role_id:
+            return f"<@&{role_id}>"
+
+        return f"@{role}"
+
     def notify(self, message, color, webhook=None):
         webhook = webhook or self.config.clan_bank_webhook
 

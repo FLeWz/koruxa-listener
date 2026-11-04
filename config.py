@@ -7,6 +7,25 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+ROLES = [
+    "Woodcutting",
+    "Mining",
+    "Fishing",
+    "Cooking",
+    "Fletching",
+    "Crafting",
+    "Jewellery",
+    "Herblore",
+    "Smithing",
+    "Firemaking",
+    "Alchemy",
+    "Arcana",
+    "Construction",
+    "Tinkering",
+    "ClanBoss",
+]
+
+
 @dataclass(frozen=True)
 class Config:
     poll_interval: int
@@ -27,6 +46,9 @@ class Config:
     node_events_webhook: str
     clan_boss_event_webhook: str
     global_buffs_webhook: str
+
+    # role name (lowercase) -> Discord role ID; empty when env var unset
+    role_ids: dict
 
     @classmethod
     def from_env(cls):
@@ -51,6 +73,7 @@ class Config:
             node_events_webhook=required("NODE_EVENTS_WEBHOOK"),
             clan_boss_event_webhook=required("CLAN_BOSS_EVENT_WEBHOOK"),
             global_buffs_webhook=required("GLOBAL_BUFFS_WEBHOOK"),
+            role_ids={r.lower(): os.getenv(f"ROLE_ID_{r.upper()}", "") for r in ROLES},
         )
 
 
