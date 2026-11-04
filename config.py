@@ -24,7 +24,9 @@ class Config:
     priv_clan_boss_api_url: str
 
     clan_bank_webhook: str
-    events_webhook: str
+    node_events_webhook: str
+    clan_boss_event_webhook: str
+    global_buffs_webhook: str
 
     @classmethod
     def from_env(cls):
@@ -46,7 +48,9 @@ class Config:
             priv_player_api_url=required("PRIV_PLAYER_API_URL"),
             priv_clan_boss_api_url=required("PRIV_CLAN_BOSS_API_URL"),
             clan_bank_webhook=required("CLAN_BANK_WEBHOOK"),
-            events_webhook=required("EVENTS_WEBHOOK"),
+            node_events_webhook=required("NODE_EVENTS_WEBHOOK"),
+            clan_boss_event_webhook=required("CLAN_BOSS_EVENT_WEBHOOK"),
+            global_buffs_webhook=required("GLOBAL_BUFFS_WEBHOOK"),
         )
 
 

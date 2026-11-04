@@ -123,7 +123,7 @@ class ClanBossService(BaseService):
         self.notify(
             "\n".join(lines),
             GREEN,
-            webhook=self.config.events_webhook,
+            webhook=self.config.clan_boss_event_webhook,
         )
 
         self.cache.set("clan_boss_phase", signature)

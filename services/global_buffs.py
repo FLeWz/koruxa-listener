@@ -77,7 +77,7 @@ class GlobalBuffService(BaseService):
             self.notify(
                 message,
                 GREEN,
-                webhook=self.config.events_webhook,
+                webhook=self.config.global_buffs_webhook,
             )
 
         for key, buff in previous.items():
@@ -87,7 +87,7 @@ class GlobalBuffService(BaseService):
             self.notify(
                 f"🌍 **Global buff ended:** " f"{self.buff_label(buff)}",
                 YELLOW,
-                webhook=self.config.events_webhook,
+                webhook=self.config.global_buffs_webhook,
             )
 
         self.cache.set("global_buffs", current)

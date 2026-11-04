@@ -53,7 +53,7 @@ class SkillEventService(BaseService):
         if current == previous:
             return
 
-        webhook = self.config.events_webhook
+        webhook = self.config.node_events_webhook
 
         if current is None:
             if previous is not None:
