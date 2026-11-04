@@ -72,7 +72,7 @@ class SkillEventService(BaseService):
 
         else:
             self.notify(
-                "**Skill event changed!**\n" + self.format_event(event),
+                "**Skill event active!**\n" + self.format_event(event),
                 GREEN,
                 webhook=webhook,
             )
