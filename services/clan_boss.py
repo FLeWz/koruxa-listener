@@ -102,7 +102,7 @@ class ClanBossService(BaseService):
 
                 return filled * filled_count + empty * (10 - filled_count)
 
-            shield_bar = make_bar(shield_hp, shield_max, "🔷", "◆")
+            shield_bar = make_bar(shield_hp, shield_max, "🟦", "⬛")
             hp_bar = make_bar(hp, max_part_hp, "🟥", "⬛")
 
             lines.extend(
@@ -111,8 +111,10 @@ class ClanBossService(BaseService):
                     f"**{emoji} {label}**",
                     f"Shield: {shield_hp:,} / {shield_max:,}",
                     f"HP: {hp:,} / {max_part_hp:,}",
+                    "```",
                     f"{shield_pct:3d}% {shield_bar}",
                     f"{hp_pct:3d}% {hp_bar}",
+                    "```",
                 ]
             )
 
