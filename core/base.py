@@ -1,4 +1,6 @@
 import logging
+import re
+
 import requests
 
 from config import Config
@@ -51,6 +53,11 @@ class BaseService:
                 }
             ]
         }
+
+        role_ids = re.findall(r"<@&(\d+)>", message)
+
+        if role_ids:
+            payload["allowed_mentions"] = {"roles": list(dict.fromkeys(role_ids))}
 
         self.post(webhook, payload)
 
