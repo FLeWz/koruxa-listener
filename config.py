@@ -23,6 +23,7 @@ ROLES = [
     "Construction",
     "Tinkering",
     "ClanBoss",
+    "Combat",
 ]
 
 
