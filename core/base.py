@@ -42,7 +42,7 @@ class BaseService:
 
         return f"@{role}"
 
-    def notify(self, message, color, webhook=None):
+    def notify(self, message, color, webhook=None, content=None):
         webhook = webhook or self.config.clan_bank_webhook
 
         payload: dict = {
@@ -62,6 +62,10 @@ class BaseService:
             # Embed mentions never ping; send them as message content too.
             payload["content"] = " ".join(f"<@&{rid}>" for rid in role_ids)
             payload["allowed_mentions"] = {"roles": role_ids}
+
+        if content:
+            parts = [payload.get("content"), content]
+            payload["content"] = " | ".join(p for p in parts if p)
 
         self.post(webhook, payload)
 

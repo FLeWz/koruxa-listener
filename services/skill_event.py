@@ -68,6 +68,7 @@ class SkillEventService(BaseService):
                 "**Skill event detected!**\n" + self.format_event(event) + "\nBreak the shield!",
                 GREEN,
                 webhook=webhook,
+                content=f"Detected | {event.get('node_label') or 'Unknown target'}",
             )
 
         else:
@@ -75,6 +76,7 @@ class SkillEventService(BaseService):
                 "**Skill event active!**\n" + self.format_event(event),
                 GREEN,
                 webhook=webhook,
+                content=f"Active | {event.get('node_label') or 'Unknown target'}",
             )
 
         self.cache.set("skill_event", current)
