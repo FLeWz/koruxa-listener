@@ -123,10 +123,16 @@ class ClanBossService(BaseService):
         if reset_in is not None:
             lines.append(f"**Window resets in:** " f"{self.format_duration(reset_in)}")
 
+        content = None
+
+        if current_hp is not None and max_hp:
+            content = f"HP: {current_hp / max_hp * 100:.1f}%"
+
         self.notify(
             "\n".join(lines),
             GREEN,
             webhook=self.config.clan_boss_event_webhook,
+            content=content,
         )
 
         self.cache.set("clan_boss_phase", signature)
