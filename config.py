@@ -51,6 +51,11 @@ class Config:
     # role name (lowercase) -> Discord role ID; empty when env var unset
     role_ids: dict
 
+    # market helper web server (optional env, defaults used when unset/empty)
+    market_host: str
+    market_port: int
+    market_file: Path
+
     @classmethod
     def from_env(cls):
         def required(name):
@@ -75,6 +80,9 @@ class Config:
             clan_boss_event_webhook=required("CLAN_BOSS_EVENT_WEBHOOK"),
             global_buffs_webhook=required("GLOBAL_BUFFS_WEBHOOK"),
             role_ids={r.lower(): os.getenv(f"ROLE_ID_{r.upper()}", "") for r in ROLES},
+            market_host=os.getenv("MARKET_HOST") or "127.0.0.1",
+            market_port=int(os.getenv("MARKET_PORT") or 8091),
+            market_file=Path(os.getenv("MARKET_FILE") or "market.json"),
         )
 
 

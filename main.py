@@ -8,12 +8,14 @@ from config import Config
 from core.cache import Cache
 from core.base import BaseService
 from core.browser import BrowserService
+from core.webserver import start_webserver
 
 from services.clan_bank import ClanBankService
 from services.player import PlayerService
 from services.global_buffs import GlobalBuffService
 from services.skill_event import SkillEventService
 from services.clan_boss import ClanBossService
+from services.market import MarketService
 
 
 class Watcher(BaseService):
@@ -104,6 +106,9 @@ def main():
     config = Config.from_env()
 
     watcher = Watcher(config)
+
+    start_webserver(config, MarketService(config, watcher.cache))
+
     watcher.run()
 
 
