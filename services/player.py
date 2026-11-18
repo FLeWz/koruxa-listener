@@ -12,5 +12,8 @@ class PlayerService(BaseService):
     ):
         data = browser_service.fetch_player(page)
 
-        buff_service.process(data)
-        skill_service.process(data)
+        if buff_service:
+            buff_service.process(data)
+
+        if skill_service:
+            skill_service.process(data)

@@ -51,6 +51,13 @@ class Config:
     # role name (lowercase) -> Discord role ID; empty when env var unset
     role_ids: dict
 
+    # which services to run (all on by default)
+    enable_clan_bank: bool
+    enable_global_buffs: bool
+    enable_skill_event: bool
+    enable_clan_boss: bool
+    enable_market: bool
+
     # market helper web server (optional env, defaults used when unset/empty)
     market_host: str
     market_port: int
@@ -64,6 +71,19 @@ class Config:
                 raise ValueError(f"Missing environment variable: {name}")
             return value
 
+        def flag(name):
+            value = (os.getenv(name) or "true").strip().lower()
+            return value not in ("0", "false", "no", "off")
+
+        enable_clan_bank = flag("ENABLE_CLAN_BANK")
+        enable_global_buffs = flag("ENABLE_GLOBAL_BUFFS")
+        enable_skill_event = flag("ENABLE_SKILL_EVENT")
+        enable_clan_boss = flag("ENABLE_CLAN_BOSS")
+
+        def required_if(enabled, name):
+            # A disabled service does not need its webhook configured.
+            return required(name) if enabled else os.getenv(name, "")
+
         return cls(
             poll_interval=int(required("POLL_INTERVAL")),
             cache_file=Path(required("CACHE_FILE")),
@@ -75,11 +95,16 @@ class Config:
             chrome_cdp_url=required("CHROME_CDP_URL"),
             priv_player_api_url=required("PRIV_PLAYER_API_URL"),
             priv_clan_boss_api_url=required("PRIV_CLAN_BOSS_API_URL"),
-            clan_bank_webhook=required("CLAN_BANK_WEBHOOK"),
-            node_events_webhook=required("NODE_EVENTS_WEBHOOK"),
-            clan_boss_event_webhook=required("CLAN_BOSS_EVENT_WEBHOOK"),
-            global_buffs_webhook=required("GLOBAL_BUFFS_WEBHOOK"),
+            clan_bank_webhook=required_if(enable_clan_bank, "CLAN_BANK_WEBHOOK"),
+            node_events_webhook=required_if(enable_skill_event, "NODE_EVENTS_WEBHOOK"),
+            clan_boss_event_webhook=required_if(enable_clan_boss, "CLAN_BOSS_EVENT_WEBHOOK"),
+            global_buffs_webhook=required_if(enable_global_buffs, "GLOBAL_BUFFS_WEBHOOK"),
             role_ids={r.lower(): os.getenv(f"ROLE_ID_{r.upper()}", "") for r in ROLES},
+            enable_clan_bank=enable_clan_bank,
+            enable_global_buffs=enable_global_buffs,
+            enable_skill_event=enable_skill_event,
+            enable_clan_boss=enable_clan_boss,
+            enable_market=flag("ENABLE_MARKET_HELPER_WEB"),
             market_host=os.getenv("MARKET_HOST") or "127.0.0.1",
             market_port=int(os.getenv("MARKET_PORT") or 8091),
             market_file=Path(os.getenv("MARKET_FILE") or "market.json"),

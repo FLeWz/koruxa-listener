@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 import requests
 
@@ -27,11 +28,12 @@ class Watcher(BaseService):
 
         self.browser_service = BrowserService(config, cache)
 
-        self.clan_bank = ClanBankService(config, cache)
+        # Only enabled services are created; the rest stay None.
+        self.clan_bank = ClanBankService(config, cache) if config.enable_clan_bank else None
         self.player = PlayerService(config, cache)
-        self.global_buffs = GlobalBuffService(config, cache)
-        self.skill_event = SkillEventService(config, cache)
-        self.clan_boss = ClanBossService(config, cache)
+        self.global_buffs = GlobalBuffService(config, cache) if config.enable_global_buffs else None
+        self.skill_event = SkillEventService(config, cache) if config.enable_skill_event else None
+        self.clan_boss = ClanBossService(config, cache) if config.enable_clan_boss else None
 
         self.browser = None
         self.page = None
@@ -44,21 +46,30 @@ class Watcher(BaseService):
 
             self.logger.info("Connected to authenticated Koruxa tab.")
 
+    def has_work(self):
+        return any((self.clan_bank, self.global_buffs, self.skill_event, self.clan_boss))
+
     def poll(self, playwright):
-        self.connect_browser(playwright)
+        needs_player = self.global_buffs or self.skill_event
 
-        self.clan_bank.check()
+        if needs_player or self.clan_boss:
+            self.connect_browser(playwright)
 
-        self.player.check(
-            self.page,
-            self.browser_service,
-            self.global_buffs,
-            self.skill_event,
-        )
+        if self.clan_bank:
+            self.clan_bank.check()
 
-        boss_data = self.browser_service.fetch_clan_boss(self.page)
+        if needs_player:
+            self.player.check(
+                self.page,
+                self.browser_service,
+                self.global_buffs,
+                self.skill_event,
+            )
 
-        self.clan_boss.process(boss_data)
+        if self.clan_boss:
+            boss_data = self.browser_service.fetch_clan_boss(self.page)
+
+            self.clan_boss.process(boss_data)
 
         self.cache.save()
 
@@ -107,9 +118,16 @@ def main():
 
     watcher = Watcher(config)
 
-    start_webserver(config, MarketService(config, watcher.cache))
+    if config.enable_market:
+        start_webserver(config, MarketService(config, watcher.cache))
 
-    watcher.run()
+    if watcher.has_work():
+        watcher.run()
+    elif config.enable_market:
+        logging.getLogger("main").info("No watcher services enabled. Only the market web server is running.")
+        threading.Event().wait()
+    else:
+        logging.getLogger("main").error("All services are disabled. Nothing to run.")
 
 
 if __name__ == "__main__":
