@@ -61,7 +61,8 @@ class Config:
     # market helper web server (optional env, defaults used when unset/empty)
     market_host: str
     market_port: int
-    market_file: Path
+    market_file: Path  # legacy JSON store, imported into market_db once
+    market_db: Path
 
     @classmethod
     def from_env(cls):
@@ -108,6 +109,7 @@ class Config:
             market_host=os.getenv("MARKET_HOST") or "127.0.0.1",
             market_port=int(os.getenv("MARKET_PORT") or 8091),
             market_file=Path(os.getenv("MARKET_FILE") or "market.json"),
+            market_db=Path(os.getenv("MARKET_DB") or "db/koruxa-listener.db"),
         )
 
 

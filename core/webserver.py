@@ -5,6 +5,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from core.tracker_page import TRACKER_PAGE
+
 logger = logging.getLogger("WebServer")
 
 SKILL_RE = re.compile(r"^[a-z_]+$")
@@ -15,7 +17,7 @@ PAGE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Koruxa market helper</title>
+<title>Herblore market</title>
 <style>
   body { font: 14px system-ui, sans-serif; background: #15171c; color: #dde; margin: 2rem auto; max-width: 1900px; padding: 0 1rem; }
   h1, h2 { font-weight: 600; }
@@ -40,10 +42,18 @@ PAGE = """<!doctype html>
   .none { color: #e74c3c; }
   #status { margin-left: 1rem; }
   .err { color: #e74c3c; }
+  nav { display: flex; gap: 1.5rem; padding-bottom: .6rem; border-bottom: 1px solid #2a2e38; }
+  nav a { color: #8a91a0; text-decoration: none; padding: .2rem 0; border-bottom: 2px solid transparent; }
+  nav a:hover { color: #dde; }
+  nav a.active { color: #dde; border-bottom-color: #2d6cdf; }
 </style>
 </head>
 <body>
-<h1 id="title">Market helper</h1>
+<nav>
+  <a href="/" class="active">Herblore market</a>
+  <a href="/tracker">Herblore tracker</a>
+</nav>
+<h1 id="title">Herblore market</h1>
 <p>
   <button id="refresh">Refresh market data</button>
   <span id="status" class="muted"></span>
@@ -57,17 +67,18 @@ PAGE = """<!doctype html>
       <th class="grp center" colspan="3">Regular</th>
       <th class="grp center" colspan="3">Double Drop</th>
       <th class="grp"></th>
+      <th class="grp"></th>
     </tr>
     <tr>
       <th class="num">Lvl</th><th>Potion</th><th>Ingredients</th>
       <th class="num grp">Craft price</th><th class="num">Qty/h</th><th class="num">Gold/h</th>
       <th class="num grp">Craft price</th><th class="num">Qty/h</th><th class="num">Gold/h</th>
       <th class="num grp" title="Market price. Potions made from other potions also show their craft price in brackets.">Market (craft)</th>
+      <th class="num grp" title="Best Gold/h (regular or double drop) x 24">Gold/day</th>
     </tr>
   </thead>
   <tbody id="recipes"></tbody>
 </table>
-      <th class="num grp" title="Best Gold/h (regular or double drop) x 24">Gold/day</th>
 
 <div class="side">
   <div>
@@ -147,7 +158,7 @@ function priceInput(key, info) {
 }
 
 function render(data) {
-  $("title").textContent = data.skill.charAt(0).toUpperCase() + data.skill.slice(1) + " market helper";
+  $("title").textContent = data.skill.charAt(0).toUpperCase() + data.skill.slice(1) + " market";
   if (data.updated_at) status("Market data from " + new Date(data.updated_at).toLocaleString());
   else status("No data yet. Press refresh.");
 
@@ -182,13 +193,13 @@ function render(data) {
     if (r.uses_potions) market = fmt(price) + " (" + fmt(r.cost) + ")";
     const mine = r.market && r.market.manual_price !== null;
     tr.append(el("td", market, "num" + (mine ? " manual" : (price === null ? " muted" : ""))));
+    const rates = [r.gold_per_hour, r.gold_per_hour_double].filter((g) => g !== null && g !== undefined);
+    const perDay = rates.length ? Math.max(...rates) * 24 : null;
+    tr.append(money(perDay, " grp"));
     recipes.append(tr);
   }
 
   fillPriceTable("items", data.items);
-    const rates = [r.gold_per_hour, r.gold_per_hour_double].filter((g) => g !== null && g !== undefined);
-    const perDay = rates.length ? Math.max(...rates) * 24 : null;
-    tr.append(money(perDay, " grp"));
   fillPriceTable("potions", data.potions);
 }
 
@@ -226,7 +237,7 @@ api("/api/data?skill=" + encodeURIComponent(skill)).then(render).catch((e) => st
 """
 
 
-def make_handler(market):
+def make_handler(market, tracker):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
             logger.info("%s - %s", self.address_string(), format % args)
@@ -242,6 +253,19 @@ def make_handler(market):
         def send_json(self, status, payload):
             self.send_body(status, json.dumps(payload).encode(), "application/json")
 
+        def read_body(self):
+            length = int(self.headers.get("Content-Length") or 0)
+
+            if length <= 0 or length > MAX_BODY:
+                raise ValueError("Invalid request body")
+
+            body = json.loads(self.rfile.read(length))
+
+            if not isinstance(body, dict):
+                raise ValueError("Invalid request body")
+
+            return body
+
         def skill(self, query):
             skill = (query.get("skill") or [DEFAULT_SKILL])[0]
 
@@ -255,9 +279,13 @@ def make_handler(market):
 
             if url.path == "/":
                 self.send_body(200, PAGE.encode(), "text/html; charset=utf-8")
-            elif url.path == "/api/data":
+            elif url.path == "/tracker":
+                self.send_body(200, TRACKER_PAGE.encode(), "text/html; charset=utf-8")
+            elif url.path in ("/api/data", "/api/tracker"):
                 try:
-                    self.send_json(200, market.view(self.skill(parse_qs(url.query))))
+                    skill = self.skill(parse_qs(url.query))
+                    view = market.view if url.path == "/api/data" else tracker.view
+                    self.send_json(200, view(skill))
                 except ValueError as error:
                     self.send_json(400, {"error": str(error)})
             else:
@@ -271,22 +299,20 @@ def make_handler(market):
                     self.send_json(200, market.refresh(self.skill(parse_qs(url.query))))
 
                 elif url.path == "/api/price":
-                    length = int(self.headers.get("Content-Length") or 0)
-
-                    if length <= 0 or length > MAX_BODY:
-                        raise ValueError("Invalid request body")
-
-                    body = json.loads(self.rfile.read(length))
-
-                    if not isinstance(body, dict):
-                        raise ValueError("Invalid request body")
-
+                    body = self.read_body()
                     market.set_price(body.get("item_key"), body.get("price"))
                     self.send_json(200, {"ok": True})
+
+                elif url.path.startswith("/api/tracker/"):
+                    action = url.path[len("/api/tracker/") :]
+                    skill = self.skill(parse_qs(url.query))
+                    self.send_json(200, tracker.handle(action, self.read_body(), skill))
 
                 else:
                     self.send_json(404, {"error": "Not found"})
 
+            except LookupError as error:
+                self.send_json(404, {"error": str(error)})
             except (ValueError, json.JSONDecodeError) as error:
                 self.send_json(400, {"error": str(error)})
             except Exception as error:
@@ -296,11 +322,11 @@ def make_handler(market):
     return Handler
 
 
-def start_webserver(config, market):
+def start_webserver(config, market, tracker):
     try:
         server = ThreadingHTTPServer(
             (config.market_host, config.market_port),
-            make_handler(market),
+            make_handler(market, tracker),
         )
     except OSError as error:
         logger.error("Web server failed to start: %s", error)

@@ -1,16 +1,15 @@
-import json
 import math
 import random
 import re
 import threading
 import time
-from datetime import datetime, timezone
 from urllib.parse import quote
 
 from playwright.sync_api import sync_playwright
 
 from core.base import BaseService
 from core.browser import BrowserService
+from core.store import Store
 
 # Items that are not sold on the market.
 FIXED_PRICES = {"vial_of_water": 50}
@@ -28,51 +27,18 @@ def item_name(key):
 class MarketService(BaseService):
     """Crafting cost helper: recipes from the skill API, prices from the marketplace.
 
-    Store layout (JSON):
-        skills: {skill: {updated_at, recipes: [...], market: {item_key: price|null}}}
-        manual: {item_key: price}   user-entered prices, override everything
+    Data lives in SQLite (see core/store.py): recipes and market prices per
+    skill, plus user-entered prices that override everything.
     """
 
     def __init__(self, config, cache):
         super().__init__(config, cache)
 
-        self.path = config.market_file
+        # An old JSON store at config.market_file is imported on first start.
+        self.store = Store(config.market_db, config.market_file)
         self.browser_service = BrowserService(config, cache)
 
-        self.store_lock = threading.Lock()
         self.refresh_lock = threading.Lock()
-
-    # ---- store -------------------------------------------------------
-
-    def _load(self):
-        data = {}
-
-        try:
-            with self.path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            pass
-
-        if not isinstance(data, dict):
-            data = {}
-
-        if not isinstance(data.get("skills"), dict):
-            data["skills"] = {}
-
-        if not isinstance(data.get("manual"), dict):
-            data["manual"] = {}
-
-        return data
-
-    def _save(self, data):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-
-        temp_file = self.path.with_suffix(self.path.suffix + ".tmp")
-
-        with temp_file.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-
-        temp_file.replace(self.path)
 
     # ---- fetching ----------------------------------------------------
 
@@ -150,14 +116,7 @@ class MarketService(BaseService):
                     self._pause(step, len(lookups), key)
                     market[key] = self._lookup_price(page, key)
 
-            with self.store_lock:
-                store = self._load()
-                store["skills"][skill] = {
-                    "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                    "recipes": recipes,
-                    "market": market,
-                }
-                self._save(store)
+            self.store.save_skill(skill, recipes, market)
 
         return self.view(skill)
 
@@ -174,26 +133,15 @@ class MarketService(BaseService):
             if not math.isfinite(price) or price < 0:
                 raise ValueError("Price must be a non-negative number")
 
-        with self.store_lock:
-            store = self._load()
-
-            if price is None:
-                store["manual"].pop(item_key, None)
-            else:
-                store["manual"][item_key] = price
-
-            self._save(store)
+        self.store.set_manual_price(item_key, price)
 
     # ---- view --------------------------------------------------------
 
     def view(self, skill):
-        with self.store_lock:
-            store = self._load()
+        entry = self.store.load_skill(skill)
+        manual = self.store.manual_prices()
 
-        entry = store["skills"].get(skill)
-        manual = store["manual"]
-
-        if not isinstance(entry, dict):
+        if entry is None:
             return {"skill": skill, "updated_at": None, "recipes": [], "items": [], "potions": []}
 
         market = entry.get("market") or {}
