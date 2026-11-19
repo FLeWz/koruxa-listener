@@ -1,0 +1,114 @@
+LOGIN_PAGE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Login</title>
+<style>
+  body { font: 14px system-ui, sans-serif; background: #15171c; color: #dde; margin: 0; display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+  form { background: #1a1d24; border: 1px solid #2a2e38; border-radius: 8px; padding: 2rem; width: 20rem; }
+  h1 { font-size: 1.3rem; font-weight: 600; margin: 0 0 1.2rem; }
+  label { display: block; margin: .8rem 0 .25rem; color: #8a91a0; }
+  input { width: 100%; box-sizing: border-box; background: #0e1014; color: #dde; border: 1px solid #3a3f4b; border-radius: 4px; padding: .5rem .6rem; }
+  button { width: 100%; margin-top: 1.2rem; background: #2d6cdf; color: #fff; border: 0; border-radius: 4px; padding: .6rem; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: wait; }
+  p { margin: .8rem 0 0; }
+  .muted { color: #8a91a0; }
+  .err { color: #e74c3c; }
+  [hidden] { display: none; }
+</style>
+</head>
+<body>
+<form id="form">
+  <h1 id="heading">Login</h1>
+  <p id="hint" class="muted" hidden></p>
+
+  <label for="username">Username</label>
+  <input id="username" name="username" autocomplete="username" maxlength="32" required autofocus>
+
+  <label for="password" id="passwordLabel">Password</label>
+  <input id="password" name="password" type="password" maxlength="128" required>
+
+  <div id="confirmBox" hidden>
+    <label for="confirm">Repeat password</label>
+    <input id="confirm" name="confirm" type="password" maxlength="128" autocomplete="new-password">
+  </div>
+
+  <button id="submit" type="submit">Login</button>
+  <p id="error" class="err"></p>
+</form>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let mode = "login"; // login | register | setup
+
+function setMode(next, username) {
+  mode = next;
+  const choosing = next !== "login";
+  $("confirmBox").hidden = !choosing;
+  $("confirm").required = choosing;
+  $("password").autocomplete = choosing ? "new-password" : "current-password";
+  $("password").value = "";
+  $("confirm").value = "";
+  $("hint").hidden = !choosing;
+
+  if (next === "setup") {
+    $("heading").textContent = "Create admin account";
+    $("hint").textContent = "No users exist yet. The account you create here is the admin.";
+    $("submit").textContent = "Create account";
+    $("passwordLabel").textContent = "Password (min 8 characters)";
+  } else if (next === "register") {
+    $("heading").textContent = "Choose a password";
+    $("hint").textContent = "No password is set for " + username + " yet. Pick one to finish registration.";
+    $("submit").textContent = "Set password and login";
+    $("passwordLabel").textContent = "New password (min 8 characters)";
+    $("username").readOnly = true;
+    $("password").focus();
+  } else {
+    $("heading").textContent = "Login";
+    $("submit").textContent = "Login";
+    $("passwordLabel").textContent = "Password";
+    $("username").readOnly = false;
+  }
+}
+
+async function post(path, body) {
+  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
+  return data;
+}
+
+$("form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  $("error").textContent = "";
+  $("submit").disabled = true;
+
+  const username = $("username").value.trim();
+  const password = $("password").value;
+
+  try {
+    if (mode !== "login" && password !== $("confirm").value) throw new Error("Passwords do not match");
+
+    const result = await post(mode === "setup" ? "/api/setup" : (mode === "register" ? "/api/register" : "/api/login"), {username, password});
+
+    if (result.status === "set_password") {
+      setMode("register", username);
+    } else {
+      location.href = "/";
+    }
+  } catch (e) {
+    $("error").textContent = e.message;
+  } finally {
+    $("submit").disabled = false;
+  }
+});
+
+fetch("/api/session").then((r) => r.json()).then((s) => {
+  if (s.user) location.href = "/";
+  else if (s.setup) setMode("setup");
+});
+</script>
+</body>
+</html>
+"""

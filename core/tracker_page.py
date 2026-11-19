@@ -30,10 +30,7 @@ TRACKER_PAGE = r"""<!doctype html>
 </style>
 </head>
 <body>
-<nav>
-  <a href="/">Herblore market</a>
-  <a href="/tracker" class="active">Herblore tracker</a>
-</nav>
+<!--NAV-->
 <h1>Herblore tracker</h1>
 <p><span id="status" class="muted"></span></p>
 

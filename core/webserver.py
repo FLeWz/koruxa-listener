@@ -1,11 +1,16 @@
+import html
 import json
 import logging
 import re
 import threading
+from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from core.auth import SESSION_SECONDS, AuthError
+from core.login_page import LOGIN_PAGE
 from core.tracker_page import TRACKER_PAGE
+from core.users_page import USERS_PAGE
 
 logger = logging.getLogger("WebServer")
 
@@ -49,13 +54,10 @@ PAGE = """<!doctype html>
 </style>
 </head>
 <body>
-<nav>
-  <a href="/" class="active">Herblore market</a>
-  <a href="/tracker">Herblore tracker</a>
-</nav>
+<!--NAV-->
 <h1 id="title">Herblore market</h1>
 <p>
-  <button id="refresh">Refresh market data</button>
+  <!--REFRESH-->
   <span id="status" class="muted"></span>
 </p>
 
@@ -217,7 +219,8 @@ function fillPriceTable(id, list) {
   }
 }
 
-$("refresh").addEventListener("click", async () => {
+// The refresh button is only rendered for the admin.
+if ($("refresh")) $("refresh").addEventListener("click", async () => {
   const button = $("refresh");
   button.disabled = true;
   status("Refreshing...");
@@ -237,21 +240,111 @@ api("/api/data?skill=" + encodeURIComponent(skill)).then(render).catch((e) => st
 """
 
 
-def make_handler(market, tracker):
+NAV_STYLE = """<style>
+  nav .right { margin-left: auto; display: flex; gap: .8rem; align-items: center; color: #8a91a0; }
+  nav button.logout { background: none; border: 1px solid #3a3f4b; color: #8a91a0; border-radius: 4px; padding: .15rem .6rem; cursor: pointer; }
+  nav button.logout:hover { color: #dde; }
+</style>"""
+
+SESSION_COOKIE = "session"
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "same-origin",
+    "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+}
+
+REFRESH_BUTTON = '<button id="refresh">Refresh market data</button>'
+
+
+def nav_html(active, user):
+    """Top navigation bar. The Users link is shown to the admin only."""
+    links = [("/", "Herblore market"), ("/tracker", "Herblore tracker")]
+
+    if user["is_admin"]:
+        links.append(("/admin", "Users"))
+
+    items = ""
+
+    for href, label in links:
+        css = ' class="active"' if href == active else ""
+        items += f'<a href="{href}"{css}>{label}</a>'
+
+    return (
+        NAV_STYLE
+        + "<nav>"
+        + items
+        + '<span class="right"><span>'
+        + html.escape(user["username"])
+        + '</span><button class="logout" onclick="fetch(\'/api/logout\',{method:\'POST\'}).then(()=>location.href=\'/login\')">Log out</button></span>'
+        + "</nav>"
+    )
+
+
+def make_handler(market, tracker, auth):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
             logger.info("%s - %s", self.address_string(), format % args)
 
-        def send_body(self, status, body, content_type):
+        # ---- responses -----------------------------------------------
+
+        def cookie(self, token, max_age):
+            parts = [f"{SESSION_COOKIE}={token}", f"Max-Age={max_age}", "Path=/", "HttpOnly", "SameSite=Lax"]
+
+            # Behind an HTTPS reverse proxy the cookie must not travel over plain HTTP.
+            if self.headers.get("X-Forwarded-Proto") == "https":
+                parts.append("Secure")
+
+            return "; ".join(parts)
+
+        def send_body(self, status, body, content_type, headers=()):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+
+            for name, value in SECURITY_HEADERS.items():
+                self.send_header(name, value)
+
+            # A valid session is renewed on every visit.
+            if getattr(self, "user", None) and self.token:
+                self.send_header("Set-Cookie", self.cookie(self.token, SESSION_SECONDS))
+
+            for name, value in headers:
+                self.send_header(name, value)
+
             self.end_headers()
             self.wfile.write(body)
 
-        def send_json(self, status, payload):
-            self.send_body(status, json.dumps(payload).encode(), "application/json")
+        def send_json(self, status, payload, headers=()):
+            self.send_body(status, json.dumps(payload).encode(), "application/json", headers)
+
+        def send_html(self, page, active=None, refresh=False):
+            page = page.replace("<!--NAV-->", nav_html(active, self.user))
+            page = page.replace("<!--REFRESH-->", REFRESH_BUTTON if refresh else "")
+            self.send_body(200, page.encode(), "text/html; charset=utf-8")
+
+        def redirect(self, location):
+            self.send_body(302, b"", "text/plain", [("Location", location)])
+
+        # ---- request helpers -----------------------------------------
+
+        def begin(self):
+            """Resolve the session cookie into self.user (None when not logged in)."""
+            jar = cookies.SimpleCookie()
+
+            try:
+                jar.load(self.headers.get("Cookie") or "")
+            except cookies.CookieError:
+                pass
+
+            morsel = jar.get(SESSION_COOKIE)
+
+            self.token = morsel.value if morsel else None
+            self.user = auth.user_for_token(self.token)
+
+        def client(self):
+            return self.client_address[0]
 
         def read_body(self):
             length = int(self.headers.get("Content-Length") or 0)
@@ -274,59 +367,163 @@ def make_handler(market, tracker):
 
             return skill
 
-        def do_GET(self):
-            url = urlparse(self.path)
+        def same_origin(self):
+            origin = self.headers.get("Origin")
 
-            if url.path == "/":
-                self.send_body(200, PAGE.encode(), "text/html; charset=utf-8")
-            elif url.path == "/tracker":
-                self.send_body(200, TRACKER_PAGE.encode(), "text/html; charset=utf-8")
-            elif url.path in ("/api/data", "/api/tracker"):
-                try:
-                    skill = self.skill(parse_qs(url.query))
-                    view = market.view if url.path == "/api/data" else tracker.view
-                    self.send_json(200, view(skill))
-                except ValueError as error:
-                    self.send_json(400, {"error": str(error)})
+            return origin is None or urlparse(origin).netloc == self.headers.get("Host")
+
+        def require_user(self, page):
+            """True when logged in. Otherwise answers: redirect for pages, 401 for the API."""
+            if self.user:
+                return True
+
+            if page:
+                self.redirect("/login")
             else:
-                self.send_json(404, {"error": "Not found"})
+                self.send_json(401, {"error": "Login required"})
 
-        def do_POST(self):
+            return False
+
+        def require_admin(self, page):
+            if not self.require_user(page):
+                return False
+
+            if self.user["is_admin"]:
+                return True
+
+            if page:
+                self.redirect("/")
+            else:
+                self.send_json(403, {"error": "Admin only"})
+
+            return False
+
+        def start_session(self, user_id):
+            token = auth.create_session(user_id)
+
+            self.send_json(200, {"status": "ok"}, [("Set-Cookie", self.cookie(token, SESSION_SECONDS))])
+
+        # ---- routes --------------------------------------------------
+
+        def do_GET(self):
+            self.begin()
             url = urlparse(self.path)
 
             try:
-                if url.path == "/api/refresh":
-                    self.send_json(200, market.refresh(self.skill(parse_qs(url.query))))
+                if url.path == "/login":
+                    self.redirect("/") if self.user else self.send_body(200, LOGIN_PAGE.encode(), "text/html; charset=utf-8")
 
-                elif url.path == "/api/price":
-                    body = self.read_body()
-                    market.set_price(body.get("item_key"), body.get("price"))
-                    self.send_json(200, {"ok": True})
+                elif url.path == "/api/session":
+                    self.send_json(200, {"setup": auth.needs_setup(), "user": self.user and {"username": self.user["username"], "is_admin": self.user["is_admin"]}})
 
-                elif url.path.startswith("/api/tracker/"):
-                    action = url.path[len("/api/tracker/") :]
-                    skill = self.skill(parse_qs(url.query))
-                    self.send_json(200, tracker.handle(action, self.read_body(), skill))
+                elif url.path == "/":
+                    if self.require_user(True):
+                        self.send_html(PAGE, "/", refresh=self.user["is_admin"])
+
+                elif url.path == "/tracker":
+                    if self.require_user(True):
+                        self.send_html(TRACKER_PAGE, "/tracker")
+
+                elif url.path == "/admin":
+                    if self.require_admin(True):
+                        self.send_html(USERS_PAGE, "/admin")
+
+                elif url.path == "/api/users":
+                    if self.require_admin(False):
+                        self.send_json(200, {"users": auth.list_users()})
+
+                elif url.path in ("/api/data", "/api/tracker"):
+                    if self.require_user(False):
+                        skill = self.skill(parse_qs(url.query))
+                        view = market.view if url.path == "/api/data" else tracker.view
+                        self.send_json(200, view(skill))
 
                 else:
                     self.send_json(404, {"error": "Not found"})
 
+            except ValueError as error:
+                self.send_json(400, {"error": str(error)})
+            except Exception:
+                logger.exception("Request failed: %s", url.path)
+                self.send_json(500, {"error": "Server error"})
+
+        def do_POST(self):
+            self.begin()
+            url = urlparse(self.path)
+
+            try:
+                if not self.same_origin():
+                    self.send_json(403, {"error": "Cross-origin request refused"})
+
+                elif url.path == "/api/login":
+                    body = self.read_body()
+                    state, user_id = auth.login(body.get("username"), body.get("password"), self.client())
+
+                    if state == "set_password":
+                        self.send_json(200, {"status": "set_password"})
+                    else:
+                        self.start_session(user_id)
+
+                elif url.path == "/api/register":
+                    body = self.read_body()
+                    self.start_session(auth.register(body.get("username"), body.get("password"), self.client()))
+
+                elif url.path == "/api/setup":
+                    body = self.read_body()
+                    self.start_session(auth.setup(body.get("username"), body.get("password")))
+
+                elif url.path == "/api/logout":
+                    auth.delete_session(self.token)
+                    self.user = None
+                    self.send_json(200, {"ok": True}, [("Set-Cookie", self.cookie("", 0))])
+
+                elif url.path == "/api/refresh":
+                    if self.require_admin(False):
+                        self.send_json(200, market.refresh(self.skill(parse_qs(url.query))))
+
+                elif url.path == "/api/users/add":
+                    if self.require_admin(False):
+                        self.send_json(200, auth.add_user(self.read_body().get("username")))
+
+                elif url.path == "/api/users/reset":
+                    if self.require_admin(False):
+                        auth.reset_password(self.read_body().get("id"))
+                        self.send_json(200, {"ok": True})
+
+                elif url.path == "/api/price":
+                    if self.require_user(False):
+                        body = self.read_body()
+                        market.set_price(body.get("item_key"), body.get("price"))
+                        self.send_json(200, {"ok": True})
+
+                elif url.path.startswith("/api/tracker/"):
+                    if self.require_user(False):
+                        action = url.path[len("/api/tracker/") :]
+                        skill = self.skill(parse_qs(url.query))
+                        self.send_json(200, tracker.handle(action, self.read_body(), skill))
+
+                else:
+                    self.send_json(404, {"error": "Not found"})
+
+            except AuthError as error:
+                self.send_json(error.status, {"error": str(error)})
             except LookupError as error:
                 self.send_json(404, {"error": str(error)})
             except (ValueError, json.JSONDecodeError) as error:
                 self.send_json(400, {"error": str(error)})
             except Exception as error:
                 logger.exception("Request failed: %s", url.path)
-                self.send_json(502, {"error": str(error)})
+                # Details only for the admin: the market refresh failures are useful to them.
+                self.send_json(502, {"error": str(error) if self.user and self.user["is_admin"] else "Server error"})
 
     return Handler
 
 
-def start_webserver(config, market, tracker):
+def start_webserver(config, market, tracker, auth):
     try:
         server = ThreadingHTTPServer(
             (config.market_host, config.market_port),
-            make_handler(market, tracker),
+            make_handler(market, tracker, auth),
         )
     except OSError as error:
         logger.error("Web server failed to start: %s", error)

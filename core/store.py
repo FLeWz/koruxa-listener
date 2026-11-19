@@ -12,6 +12,23 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT
 );
 
+-- Web login. password_hash NULL means the password is not set yet (registration pending).
+-- The first user created is the admin.
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY,
+    username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT,
+    is_admin      INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL
+);
+
+-- Only a SHA-256 of the session token is stored.
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL             -- unix seconds, pushed forward on every visit
+);
+
 -- Market helper
 CREATE TABLE IF NOT EXISTS skills (
     skill      TEXT PRIMARY KEY,

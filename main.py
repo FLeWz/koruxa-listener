@@ -9,6 +9,7 @@ from config import Config
 from core.cache import Cache
 from core.base import BaseService
 from core.browser import BrowserService
+from core.auth import Auth
 from core.tracker import Tracker
 from core.webserver import start_webserver
 
@@ -122,7 +123,7 @@ def main():
     if config.enable_market:
         market = MarketService(config, watcher.cache)
 
-        start_webserver(config, market, Tracker(market.store, market))
+        start_webserver(config, market, Tracker(market.store, market), Auth(market.store))
 
     if watcher.has_work():
         watcher.run()
