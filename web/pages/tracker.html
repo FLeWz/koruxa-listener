@@ -2,28 +2,29 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!--THEME-->
 <title>Herblore tracker</title>
 <style>
-  body { font: 14px system-ui, sans-serif; background: #15171c; color: #dde; margin: 0; }
+  body { font: 14px system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; }
   main { max-width: 1100px; margin: 1.5rem auto 2rem; padding: 0 1rem; }
   h1, h2, h3 { font-weight: 600; }
   h3 { margin: 0 0 .5rem; }
-  a { color: #8ab; }
-  button { background: #2d6cdf; color: #fff; border: 0; border-radius: 4px; padding: .4rem .9rem; cursor: pointer; }
-  button.link { background: none; color: #e74c3c; padding: 0 .4rem; }
-  input, select { background: #0e1014; color: #dde; border: 1px solid #3a3f4b; border-radius: 4px; padding: .3rem .5rem; }
+  a { color: var(--link); }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: .4rem .9rem; cursor: pointer; }
+  button.link { background: none; color: var(--danger); padding: 0 .4rem; }
+  input, select { background: var(--input-bg); color: var(--text); border: 1px solid var(--border-strong); border-radius: 4px; padding: .3rem .5rem; }
   input.n { width: 6rem; text-align: right; }
   input.name { width: 14rem; }
   table { border-collapse: collapse; margin: .5rem 0 1rem; }
-  th, td { text-align: left; padding: .3rem .8rem .3rem 0; border-bottom: 1px solid #2a2e38; }
+  th, td { text-align: left; padding: .3rem .8rem .3rem 0; border-bottom: 1px solid var(--border); }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin: .6rem 0; }
-  .card { border: 1px solid #2a2e38; border-radius: 6px; padding: 1rem; margin-bottom: 1.2rem; background: #1a1d24; }
-  .seed { border-left: 3px solid #3a3f4b; padding-left: .8rem; margin: .8rem 0; }
-  .muted { color: #8a91a0; }
-  .ok { color: #2ecc71; }
-  .none { color: #e74c3c; }
-  .err { color: #e74c3c; }
+  .card { border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin-bottom: 1.2rem; background: var(--surface); }
+  .seed { border-left: 3px solid var(--border-strong); padding-left: .8rem; margin: .8rem 0; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--ok); }
+  .none { color: var(--danger); }
+  .err { color: var(--danger); }
 </style>
 </head>
 <body>

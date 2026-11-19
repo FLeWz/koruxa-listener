@@ -2,32 +2,33 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!--THEME-->
 <title>Herblore market</title>
 <style>
-  body { font: 14px system-ui, sans-serif; background: #15171c; color: #dde; margin: 0; }
+  body { font: 14px system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; }
   main { max-width: 1900px; margin: 1.5rem auto 2rem; padding: 0 1rem; }
   h1, h2 { font-weight: 600; }
-  button { background: #2d6cdf; color: #fff; border: 0; border-radius: 4px; padding: .4rem .9rem; cursor: pointer; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: .4rem .9rem; cursor: pointer; }
   button:disabled { opacity: .5; cursor: wait; }
-  button.link { background: none; color: #8ab; padding: 0 .4rem; }
+  button.link { background: none; color: var(--link); padding: 0 .4rem; }
   table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
-  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #2a2e38; vertical-align: top; }
+  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
   .side { display: flex; gap: 3rem; align-items: flex-start; flex-wrap: wrap; }
   table.narrow { width: auto; }
   table.narrow input { width: 7rem; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  input { width: 9rem; background: #0e1014; color: #dde; border: 1px solid #3a3f4b; border-radius: 4px; padding: .25rem .4rem; text-align: right; }
-  input.manual { border-color: #f1c40f; color: #f1c40f; }
-  input.missing { border-color: #e74c3c; }
-  tbody tr:hover { background: #222733; }
+  input { width: 9rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border-strong); border-radius: 4px; padding: .25rem .4rem; text-align: right; }
+  input.manual { border-color: var(--warn); color: var(--warn); }
+  input.missing { border-color: var(--danger); }
+  tbody tr:hover { background: var(--hover); }
   th.center { text-align: center; }
   .ingr { max-width: 400px; }
-  th.grp, td.grp { border-left: 1px solid #3a3f4b; }
-  .muted { color: #8a91a0; }
-  .manual { color: #f1c40f; }
-  .none { color: #e74c3c; }
+  th.grp, td.grp { border-left: 1px solid var(--border-strong); }
+  .muted { color: var(--muted); }
+  .manual { color: var(--warn); }
+  .none { color: var(--danger); }
   #status { margin-left: 1rem; }
-  .err { color: #e74c3c; }
+  .err { color: var(--danger); }
 </style>
 </head>
 <body>

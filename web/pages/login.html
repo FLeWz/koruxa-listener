@@ -2,23 +2,26 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!--THEME-->
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Login</title>
 <style>
-  body { font: 14px system-ui, sans-serif; background: #15171c; color: #dde; margin: 0; display: flex; min-height: 100vh; align-items: center; justify-content: center; }
-  form { background: #1a1d24; border: 1px solid #2a2e38; border-radius: 8px; padding: 2rem; width: 20rem; }
+  body { font: 14px system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+  form { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 2rem; width: 20rem; }
   h1 { font-size: 1.3rem; font-weight: 600; margin: 0 0 1.2rem; }
-  label { display: block; margin: .8rem 0 .25rem; color: #8a91a0; }
-  input { width: 100%; box-sizing: border-box; background: #0e1014; color: #dde; border: 1px solid #3a3f4b; border-radius: 4px; padding: .5rem .6rem; }
-  button { width: 100%; margin-top: 1.2rem; background: #2d6cdf; color: #fff; border: 0; border-radius: 4px; padding: .6rem; cursor: pointer; }
+  label { display: block; margin: .8rem 0 .25rem; color: var(--muted); }
+  input { width: 100%; box-sizing: border-box; background: var(--input-bg); color: var(--text); border: 1px solid var(--border-strong); border-radius: 4px; padding: .5rem .6rem; }
+  button { width: 100%; margin-top: 1.2rem; background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: .6rem; cursor: pointer; }
   button:disabled { opacity: .5; cursor: wait; }
   p { margin: .8rem 0 0; }
-  .muted { color: #8a91a0; }
-  .err { color: #e74c3c; }
+  .muted { color: var(--muted); }
+  .err { color: var(--danger); }
   [hidden] { display: none; }
+  .theme { position: fixed; top: 1rem; right: 1rem; }
 </style>
 </head>
 <body>
+<div class="theme"><!--THEMEBUTTON--></div>
 <form id="form">
   <h1 id="heading">Login</h1>
   <p id="hint" class="muted" hidden></p>

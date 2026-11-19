@@ -34,13 +34,13 @@ var securityHeaders = map[string]string{
 
 const navStyle = `<style>
   html { scrollbar-gutter: stable; }
-  nav { display: flex; gap: 1.5rem; align-items: center; padding: .7rem 1.5rem; background: #1a1d24; border-bottom: 1px solid #2a2e38; font: 14px system-ui, sans-serif; }
-  nav a { color: #8a91a0; text-decoration: none; padding: .2rem 0; border-bottom: 2px solid transparent; }
-  nav a:hover { color: #dde; }
-  nav a.active { color: #dde; border-bottom-color: #2d6cdf; }
-  nav .right { margin-left: auto; display: flex; gap: .8rem; align-items: center; color: #8a91a0; }
-  nav button.logout { background: none; border: 1px solid #3a3f4b; color: #8a91a0; border-radius: 4px; padding: .15rem .6rem; cursor: pointer; }
-  nav button.logout:hover { color: #dde; }
+  nav { display: flex; gap: 1.5rem; align-items: center; padding: .7rem 1.5rem; background: var(--surface); border-bottom: 1px solid var(--border); font: 14px system-ui, sans-serif; }
+  nav a { color: var(--muted); text-decoration: none; padding: .2rem 0; border-bottom: 2px solid transparent; }
+  nav a:hover { color: var(--text); }
+  nav a.active { color: var(--text); border-bottom-color: var(--accent); }
+  nav .right { margin-left: auto; display: flex; gap: .8rem; align-items: center; color: var(--muted); }
+  nav button.logout { background: none; border: 1px solid var(--border-strong); color: var(--muted); border-radius: 4px; padding: .15rem .6rem; cursor: pointer; }
+  nav button.logout:hover { color: var(--text); }
 </style>`
 
 const refreshButton = `<button id="refresh">Refresh market data</button>`
@@ -138,6 +138,8 @@ func (q *req) page(name, active string, refresh bool) {
 	}
 
 	page := string(raw)
+	page = strings.Replace(page, "<!--THEME-->", themeHead, 1)
+	page = strings.Replace(page, "<!--THEMEBUTTON-->", themeButton, 1)
 	page = strings.Replace(page, "<!--NAV-->", navHTML(active, q.user), 1)
 
 	if refresh {
@@ -180,7 +182,7 @@ func navHTML(active string, user *User) string {
 		name = user.Username
 	}
 
-	b.WriteString(`<span class="right"><span>` + html.EscapeString(name) + `</span>`)
+	b.WriteString(`<span class="right">` + themeButton + `<span>` + html.EscapeString(name) + `</span>`)
 	b.WriteString(`<button class="logout" onclick="fetch('/api/logout',{method:'POST'}).then(()=>location.href='/login')">Log out</button></span></nav>`)
 
 	return b.String()

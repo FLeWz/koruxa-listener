@@ -2,21 +2,22 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!--THEME-->
 <title>Users</title>
 <style>
-  body { font: 14px system-ui, sans-serif; background: #15171c; color: #dde; margin: 0; }
+  body { font: 14px system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; }
   main { max-width: 900px; margin: 1.5rem auto 2rem; padding: 0 1rem; }
   h1 { font-weight: 600; }
-  button { background: #2d6cdf; color: #fff; border: 0; border-radius: 4px; padding: .4rem .9rem; cursor: pointer; }
-  button.danger { background: none; color: #e74c3c; padding: 0 .4rem; }
-  input { background: #0e1014; color: #dde; border: 1px solid #3a3f4b; border-radius: 4px; padding: .3rem .5rem; width: 14rem; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: .4rem .9rem; cursor: pointer; }
+  button.danger { background: none; color: var(--danger); padding: 0 .4rem; }
+  input { background: var(--input-bg); color: var(--text); border: 1px solid var(--border-strong); border-radius: 4px; padding: .3rem .5rem; width: 14rem; }
   table { border-collapse: collapse; margin: 1rem 0 2rem; width: 100%; }
-  th, td { text-align: left; padding: .4rem .8rem .4rem 0; border-bottom: 1px solid #2a2e38; }
+  th, td { text-align: left; padding: .4rem .8rem .4rem 0; border-bottom: 1px solid var(--border); }
   .row { display: flex; gap: .6rem; align-items: center; margin: .6rem 0; }
-  .muted { color: #8a91a0; }
-  .ok { color: #2ecc71; }
-  .pending { color: #f1c40f; }
-  .err { color: #e74c3c; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--ok); }
+  .pending { color: var(--warn); }
+  .err { color: var(--danger); }
 </style>
 </head>
 <body>
