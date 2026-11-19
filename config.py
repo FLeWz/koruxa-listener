@@ -63,6 +63,7 @@ class Config:
     market_port: int
     market_file: Path  # legacy JSON store, imported into market_db once
     market_db: Path
+    worker_socket: Path  # Unix socket the Go web server uses to ask for market refreshes
 
     @classmethod
     def from_env(cls):
@@ -110,6 +111,7 @@ class Config:
             market_port=int(os.getenv("MARKET_PORT") or 8091),
             market_file=Path(os.getenv("MARKET_FILE") or "market.json"),
             market_db=Path(os.getenv("MARKET_DB") or "db/koruxa-listener.db"),
+            worker_socket=Path(os.getenv("WORKER_SOCKET") or "worker.sock"),
         )
 
 

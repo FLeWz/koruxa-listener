@@ -1,6 +1,4 @@
-import math
 import random
-import re
 import threading
 import time
 from urllib.parse import quote
@@ -11,24 +9,19 @@ from core.base import BaseService
 from core.browser import BrowserService
 from core.store import Store
 
-# Items that are not sold on the market.
+# Items that are not sold on the market (the Go web server knows the same list).
 FIXED_PRICES = {"vial_of_water": 50}
 
 # Random pause (seconds) between API requests, to stay polite to the server.
 REQUEST_DELAY = (10, 20)
 
-KEY_RE = re.compile(r"^[a-z0-9_]+$")
-
-
-def item_name(key):
-    return key.replace("_", " ").title()
-
 
 class MarketService(BaseService):
-    """Crafting cost helper: recipes from the skill API, prices from the marketplace.
+    """Fetches recipes from the skill API and prices from the marketplace into SQLite.
 
-    Data lives in SQLite (see core/store.py): recipes and market prices per
-    skill, plus user-entered prices that override everything.
+    This is the part that needs Chrome. The Go web server (web/) reads the
+    results from the database and asks this service, through core/worker.py,
+    to refresh.
     """
 
     def __init__(self, config, cache):
@@ -39,6 +32,9 @@ class MarketService(BaseService):
         self.browser_service = BrowserService(config, cache)
 
         self.refresh_lock = threading.Lock()
+
+        self.jobs = {}  # skill -> {state, progress, error, started_at, finished_at}
+        self.jobs_lock = threading.Lock()
 
     # ---- fetching ----------------------------------------------------
 
@@ -113,164 +109,43 @@ class MarketService(BaseService):
                 lookups = [key for key in keys if key not in FIXED_PRICES]
 
                 for step, key in enumerate(lookups, start=1):
+                    self._set_job(skill, progress=f"{step}/{len(lookups)}")
                     self._pause(step, len(lookups), key)
                     market[key] = self._lookup_price(page, key)
 
             self.store.save_skill(skill, recipes, market)
 
-        return self.view(skill)
+    # ---- refresh jobs ------------------------------------------------
+    # A refresh takes minutes, so the web server starts one and polls its status.
 
-    # ---- manual prices -----------------------------------------------
+    def _set_job(self, skill, **fields):
+        with self.jobs_lock:
+            self.jobs.setdefault(skill, {"state": "idle"}).update(fields)
 
-    def set_price(self, item_key, price):
-        if not isinstance(item_key, str) or not KEY_RE.match(item_key):
-            raise ValueError("Invalid item key")
+    def job_status(self, skill):
+        with self.jobs_lock:
+            return dict(self.jobs.get(skill, {"state": "idle"}))
 
-        if price is not None:
-            if isinstance(price, bool) or not isinstance(price, (int, float)):
-                raise ValueError("Price must be a number")
+    def start_refresh(self, skill):
+        """Start a refresh in the background. A refresh already running is reported, not doubled."""
+        with self.jobs_lock:
+            if any(job.get("state") == "running" for job in self.jobs.values()):
+                job = self.jobs.get(skill) or {}
 
-            if not math.isfinite(price) or price < 0:
-                raise ValueError("Price must be a non-negative number")
+                return dict(job) if job.get("state") == "running" else {"state": "running", "progress": "another refresh is running"}
 
-        self.store.set_manual_price(item_key, price)
+            self.jobs[skill] = {"state": "running", "progress": "starting", "started_at": time.time(), "error": None}
 
-    # ---- view --------------------------------------------------------
+        threading.Thread(target=self._run_refresh, args=(skill,), name=f"refresh-{skill}", daemon=True).start()
 
-    def view(self, skill):
-        entry = self.store.load_skill(skill)
-        manual = self.store.manual_prices()
+        return self.job_status(skill)
 
-        if entry is None:
-            return {"skill": skill, "updated_at": None, "recipes": [], "items": [], "potions": []}
-
-        market = entry.get("market") or {}
-
-        def auto_price(key):
-            if key in FIXED_PRICES:
-                return FIXED_PRICES[key]
-
-            return market.get(key)
-
-        def price_info(key):
-            """Used price (your price wins), your price, and the automatic price."""
-            auto = auto_price(key)
-            mine = manual.get(key)
-
-            return {
-                "price": mine if mine is not None else auto,
-                "manual_price": mine,
-                "auto_price": auto,
-            }
-
-        by_reward = {(r.get("reward_key") or r["key"]): r for r in entry.get("recipes") or []}
-
-        def unit_price(key, stack=()):
-            """Your price, else market/fixed, else craft price when the item is a potion."""
-            price = price_info(key)["price"]
-
-            if price is not None:
-                return price
-
-            recipe = by_reward.get(key)
-
-            if recipe is None or key in stack:
-                return None
-
-            total = 0
-
-            for ingredient in recipe["ingredients"]:
-                part = unit_price(ingredient["item_key"], stack + (key,))
-
-                if part is None:
-                    return None
-
-                total += part * ingredient["quantity"]
-
-            return total
-
-        recipes = []
-        item_keys = set()
-
-        for recipe in entry.get("recipes") or []:
-            ingredients = []
-            cost = 0
-            missing = 0
-
-            for ingredient in recipe["ingredients"]:
-                key = ingredient["item_key"]
-                quantity = ingredient["quantity"]
-                info = price_info(key)
-                price = unit_price(key)
-                item_keys.add(key)
-
-                total = price * quantity if price is not None else None
-
-                if total is None:
-                    missing += 1
-                else:
-                    cost += total
-
-                ingredients.append(
-                    {
-                        "item_key": key,
-                        "name": item_name(key),
-                        "quantity": quantity,
-                        "total": total,
-                        **info,
-                        "price": price,
-                    }
-                )
-
-            reward_key = recipe.get("reward_key") or recipe["key"]
-            cost = cost if not missing else None
-
-            # Per-hour numbers use your current bonuses as reported by the skill API.
-            cycle_ms = recipe.get("cycle_ms")
-            sell = price_info(reward_key)["price"]
-            crafts = qty = qty_double = gold = gold_double = None
-
-            if cycle_ms:
-                crafts = 3_600_000 / cycle_ms
-                qty = crafts * (recipe.get("amount") or 1)
-                qty_double = qty * (1 + (recipe.get("yield_chance") or 0) / 100)
-
-                if sell is not None and cost is not None:
-                    gold = qty * sell - crafts * cost
-                    gold_double = qty_double * sell - crafts * cost
-
-            recipes.append(
-                {
-                    "key": recipe["key"],
-                    "label": recipe["label"],
-                    "level": recipe.get("level"),
-                    "reward_key": reward_key,
-                    "market": price_info(reward_key) if reward_key else None,
-                    "uses_potions": any(i["item_key"] in by_reward for i in ingredients),
-                    "ingredients": ingredients,
-                    "cost": cost,
-                    "cost_double": cost / (1 + (recipe.get("yield_chance") or 0) / 100) if cost is not None and cycle_ms else None,
-                    "missing": missing,
-                    "crafts_per_hour": crafts,
-                    "qty_per_hour": qty,
-                    "qty_per_hour_double": qty_double,
-                    "gold_per_hour": gold,
-                    "gold_per_hour_double": gold_double,
-                }
-            )
-
-        recipes.sort(key=lambda r: (r["level"] is None, r["level"] or 0, r["label"] or ""))
-
-        # Potions are listed in their own table, not as ingredients.
-        potion_keys = {r["reward_key"] for r in recipes}
-        items = [{"item_key": key, "name": item_name(key), **price_info(key)} for key in sorted(item_keys - potion_keys)]
-
-        potions = [{"item_key": r["reward_key"], "name": r["label"], **price_info(r["reward_key"])} for r in recipes]
-
-        return {
-            "skill": skill,
-            "updated_at": entry.get("updated_at"),
-            "recipes": recipes,
-            "items": items,
-            "potions": potions,
-        }
+    def _run_refresh(self, skill):
+        try:
+            self.refresh(skill)
+        except Exception as error:
+            self.logger.exception("Market refresh failed for %s", skill)
+            self._set_job(skill, state="error", error=str(error) or type(error).__name__, finished_at=time.time())
+        else:
+            self.logger.info("Market refresh done for %s", skill)
+            self._set_job(skill, state="done", progress="", finished_at=time.time())

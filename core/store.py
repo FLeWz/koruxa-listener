@@ -107,12 +107,20 @@ def now():
 
 
 class Store:
-    """SQLite store. One short-lived connection per operation, safe across threads."""
+    """SQLite store. One short-lived connection per operation, safe across threads.
+
+    This side owns the schema and writes market data. The Go web server (web/)
+    reads and writes the rest (users, sessions, tracker, manual prices).
+    """
 
     def __init__(self, db_path, legacy_json=None):
         self.path = db_path
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
+
+        # The Go web server and this process share the file; WAL lets readers and the writer overlap.
+        with self.connect() as db:
+            db.execute("PRAGMA journal_mode = WAL")
 
         with self.connect() as db:
             db.executescript(SCHEMA)
@@ -204,23 +212,7 @@ class Store:
 
             logger.info("Migrated %s into %s (%d skill(s), %d manual price(s))", path, self.path, len(skills), len(manual))
 
-    # ---- market helper -----------------------------------------------
-
-    def load_skill(self, skill):
-        """Return {updated_at, recipes, market} or None when the skill was never refreshed."""
-        with self.connect() as db:
-            row = db.execute("SELECT updated_at, recipes FROM skills WHERE skill = ?", (skill,)).fetchone()
-
-            if row is None:
-                return None
-
-            prices = db.execute("SELECT item_key, price FROM market_prices WHERE skill = ?", (skill,)).fetchall()
-
-        return {
-            "updated_at": row["updated_at"],
-            "recipes": json.loads(row["recipes"]),
-            "market": {p["item_key"]: p["price"] for p in prices},
-        }
+    # ---- market refresh ----------------------------------------------
 
     def save_skill(self, skill, recipes, market):
         with self.connect() as db:
@@ -233,17 +225,3 @@ class Store:
                 "INSERT INTO market_prices (skill, item_key, price) VALUES (?, ?, ?)",
                 [(skill, key, price) for key, price in market.items()],
             )
-
-    def manual_prices(self):
-        with self.connect() as db:
-            return {r["item_key"]: r["price"] for r in db.execute("SELECT item_key, price FROM manual_prices")}
-
-    def set_manual_price(self, item_key, price):
-        with self.connect() as db:
-            if price is None:
-                db.execute("DELETE FROM manual_prices WHERE item_key = ?", (item_key,))
-            else:
-                db.execute(
-                    "INSERT OR REPLACE INTO manual_prices (item_key, price) VALUES (?, ?)",
-                    (item_key, price),
-                )

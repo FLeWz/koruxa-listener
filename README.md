@@ -19,14 +19,15 @@ State is kept in a JSON cache file so events are not reported twice.
 ## Requirements
 
 - Python 3
+- Go 1.24+ and `make` (build the web server in `web/`)
 - Google Chrome (`google-chrome-stable` on PATH)
 - Python packages: `requests`, `python-dotenv`, `playwright`
 
 There is no `requirements.txt` yet. Install manually:
 
-    python -m venv venv
-    source venv/bin/activate
-    pip install requests python-dotenv playwright
+    make venv
+
+or by hand: `python -m venv venv`, activate it, `pip install requests python-dotenv playwright`.
 
 ## Configuration
 
@@ -50,7 +51,10 @@ Never commit `.env`. It is gitignored.
 
 ## Run
 
-    python main.py
+    make run
+
+This builds the web server, activates `venv` (or uses the venv already active in
+your shell; `make run VENV=/path/to/venv` picks another) and starts `main.py`.
 
 On start the watcher launches Chrome with remote debugging on port 9222 and
 profile `~/.koruxa-bot-chrome`, opens Koruxa, and attaches via Playwright.
@@ -59,10 +63,21 @@ authenticated session.
 
 ## Layout
 
-    main.py       watcher loop
+    main.py       watcher loop, starts the worker socket and the web server
     config.py     env config, role list, embed colors
-    core/         base service, browser, cache, Discord helper
+    core/         base service, browser, cache, Discord helper, SQLite store,
+                  worker socket (core/worker.py), Go process launcher (core/webproc.py)
     services/     one module per event source
+    web/          Go web server: login, Herblore market, Herblore tracker, users
+
+## Web server
+
+`make build` compiles `web/` to `web/bin/koruxa-web`. `main.py` starts it as a child process and logs its output.
+The web server only needs the SQLite database (`MARKET_DB`), so it is up even when Chrome
+is not open. Market refreshes need Chrome: the web server asks the Python process for them
+over the Unix socket `WORKER_SOCKET`. Set `ENABLE_MARKET_HELPER_WEB=false` to not start it.
+
+The first account created at `/login` on an empty database is the admin.
 
 ## License
 

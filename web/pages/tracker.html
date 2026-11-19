@@ -1,10 +1,11 @@
-TRACKER_PAGE = r"""<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <title>Herblore tracker</title>
 <style>
-  body { font: 14px system-ui, sans-serif; background: #15171c; color: #dde; margin: 2rem auto; max-width: 1100px; padding: 0 1rem; }
+  body { font: 14px system-ui, sans-serif; background: #15171c; color: #dde; margin: 0; }
+  main { max-width: 1100px; margin: 1.5rem auto 2rem; padding: 0 1rem; }
   h1, h2, h3 { font-weight: 600; }
   h3 { margin: 0 0 .5rem; }
   a { color: #8ab; }
@@ -23,14 +24,11 @@ TRACKER_PAGE = r"""<!doctype html>
   .ok { color: #2ecc71; }
   .none { color: #e74c3c; }
   .err { color: #e74c3c; }
-  nav { display: flex; gap: 1.5rem; padding-bottom: .6rem; border-bottom: 1px solid #2a2e38; }
-  nav a { color: #8a91a0; text-decoration: none; padding: .2rem 0; border-bottom: 2px solid transparent; }
-  nav a:hover { color: #dde; }
-  nav a.active { color: #dde; border-bottom-color: #2d6cdf; }
 </style>
 </head>
 <body>
 <!--NAV-->
+<main>
 <h1>Herblore tracker</h1>
 <p><span id="status" class="muted"></span></p>
 
@@ -47,6 +45,8 @@ TRACKER_PAGE = r"""<!doctype html>
 
 <div id="request" class="row"></div>
 <div id="orders"></div>
+
+</main>
 
 <script>
 const skill = new URLSearchParams(location.search).get("skill") || "herblore";
@@ -326,4 +326,3 @@ load().catch((e) => status(e.message, true));
 </script>
 </body>
 </html>
-"""

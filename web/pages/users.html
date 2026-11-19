@@ -1,10 +1,11 @@
-USERS_PAGE = r"""<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <title>Users</title>
 <style>
-  body { font: 14px system-ui, sans-serif; background: #15171c; color: #dde; margin: 2rem auto; max-width: 900px; padding: 0 1rem; }
+  body { font: 14px system-ui, sans-serif; background: #15171c; color: #dde; margin: 0; }
+  main { max-width: 900px; margin: 1.5rem auto 2rem; padding: 0 1rem; }
   h1 { font-weight: 600; }
   button { background: #2d6cdf; color: #fff; border: 0; border-radius: 4px; padding: .4rem .9rem; cursor: pointer; }
   button.danger { background: none; color: #e74c3c; padding: 0 .4rem; }
@@ -16,14 +17,11 @@ USERS_PAGE = r"""<!doctype html>
   .ok { color: #2ecc71; }
   .pending { color: #f1c40f; }
   .err { color: #e74c3c; }
-  nav { display: flex; gap: 1.5rem; padding-bottom: .6rem; border-bottom: 1px solid #2a2e38; }
-  nav a { color: #8a91a0; text-decoration: none; padding: .2rem 0; border-bottom: 2px solid transparent; }
-  nav a:hover { color: #dde; }
-  nav a.active { color: #dde; border-bottom-color: #2d6cdf; }
 </style>
 </head>
 <body>
 <!--NAV-->
+<main>
 <h1>Users</h1>
 <p class="muted">Add a username, then tell that person to open the login page and enter it. With no password set, they are asked to choose one. Resetting a password empties it so they register again.</p>
 
@@ -37,6 +35,8 @@ USERS_PAGE = r"""<!doctype html>
   <thead><tr><th>Username</th><th>Role</th><th>Password</th><th></th></tr></thead>
   <tbody id="users"></tbody>
 </table>
+
+</main>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -110,4 +110,3 @@ load().catch((e) => status(e.message, true));
 </script>
 </body>
 </html>
-"""
