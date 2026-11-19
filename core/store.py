@@ -1,6 +1,7 @@
 import json
 import logging
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -46,6 +47,18 @@ CREATE TABLE IF NOT EXISTS market_prices (
 CREATE TABLE IF NOT EXISTS manual_prices (
     item_key TEXT PRIMARY KEY,
     price    REAL NOT NULL
+);
+
+-- Market refresh requests. The web server queues a job, the Python worker runs it and
+-- reports progress here. One row per skill. State: queued, running, done, error.
+CREATE TABLE IF NOT EXISTS refresh_jobs (
+    skill        TEXT PRIMARY KEY,
+    state        TEXT NOT NULL,
+    progress     TEXT NOT NULL DEFAULT '',
+    error        TEXT,
+    requested_at INTEGER NOT NULL,          -- unix seconds
+    started_at   INTEGER,
+    finished_at  INTEGER
 );
 
 -- Potion crafting tracker
@@ -111,6 +124,10 @@ class Store:
 
     This side owns the schema and writes market data. The Go web server (web/)
     reads and writes the rest (users, sessions, tracker, manual prices).
+
+    The database is also the channel between the two: the web server queues rows in
+    refresh_jobs, this side runs them, and meta.worker_heartbeat tells the web server
+    that the worker is alive.
     """
 
     def __init__(self, db_path, legacy_json=None):
@@ -211,6 +228,53 @@ class Store:
             )
 
             logger.info("Migrated %s into %s (%d skill(s), %d manual price(s))", path, self.path, len(skills), len(manual))
+
+    # ---- worker channel ----------------------------------------------
+
+    def heartbeat(self):
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO meta (key, value) VALUES ('worker_heartbeat', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (str(int(time.time())),),
+            )
+
+    def fail_interrupted_jobs(self):
+        """A job left 'running' belongs to a worker that is gone."""
+        with self.connect() as db:
+            db.execute(
+                "UPDATE refresh_jobs SET state = 'error', progress = '', error = ?, finished_at = ? WHERE state = 'running'",
+                ("Interrupted by a worker restart", int(time.time())),
+            )
+
+    def claim_job(self):
+        """Take the oldest queued job and mark it running. Returns the skill or None."""
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT skill FROM refresh_jobs WHERE state = 'queued' ORDER BY requested_at, rowid LIMIT 1"
+            ).fetchone()
+
+            if row is None:
+                return None
+
+            db.execute(
+                "UPDATE refresh_jobs SET state = 'running', progress = 'starting', error = NULL, started_at = ? "
+                "WHERE skill = ? AND state = 'queued'",
+                (int(time.time()), row["skill"]),
+            )
+
+            return row["skill"]
+
+    def set_job_progress(self, skill, progress):
+        with self.connect() as db:
+            db.execute("UPDATE refresh_jobs SET progress = ? WHERE skill = ?", (progress, skill))
+
+    def finish_job(self, skill, error=None):
+        with self.connect() as db:
+            db.execute(
+                "UPDATE refresh_jobs SET state = ?, progress = '', error = ?, finished_at = ? WHERE skill = ?",
+                ("error" if error else "done", error, int(time.time()), skill),
+            )
 
     # ---- market refresh ----------------------------------------------
 

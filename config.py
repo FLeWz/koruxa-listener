@@ -58,12 +58,9 @@ class Config:
     enable_clan_boss: bool
     enable_market: bool
 
-    # market helper web server (optional env, defaults used when unset/empty)
-    market_host: str
-    market_port: int
+    # market helper: the web server is a separate process (web/) that shares market_db
     market_file: Path  # legacy JSON store, imported into market_db once
     market_db: Path
-    worker_socket: Path  # Unix socket the Go web server uses to ask for market refreshes
 
     @classmethod
     def from_env(cls):
@@ -107,11 +104,8 @@ class Config:
             enable_skill_event=enable_skill_event,
             enable_clan_boss=enable_clan_boss,
             enable_market=flag("ENABLE_MARKET_HELPER_WEB"),
-            market_host=os.getenv("MARKET_HOST") or "127.0.0.1",
-            market_port=int(os.getenv("MARKET_PORT") or 8091),
             market_file=Path(os.getenv("MARKET_FILE") or "market.json"),
             market_db=Path(os.getenv("MARKET_DB") or "db/koruxa-listener.db"),
-            worker_socket=Path(os.getenv("WORKER_SOCKET") or "worker.sock"),
         )
 
 

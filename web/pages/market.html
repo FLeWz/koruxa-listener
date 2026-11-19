@@ -200,7 +200,7 @@ function fillPriceTable(id, list) {
   }
 }
 
-// The refresh runs in the worker and takes minutes: start it, then poll its status.
+// The refresh is queued in the database for the worker and takes minutes: start it, then poll its status.
 // The button is only rendered for the admin.
 const query = "?skill=" + encodeURIComponent(skill);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -213,7 +213,7 @@ async function watchRefresh() {
     for (;;) {
       const job = await api("/api/refresh/status" + query);
 
-      if (job.state === "running") {
+      if (job.state === "queued" || job.state === "running") {
         status("Refreshing... " + (job.progress || ""));
         await sleep(3000);
         continue;
@@ -244,7 +244,7 @@ if ($("refresh")) {
   });
 
   // A refresh started earlier may still be running.
-  api("/api/refresh/status" + query).then((job) => { if (job.state === "running") watchRefresh(); }).catch(() => {});
+  api("/api/refresh/status" + query).then((job) => { if (job.state === "queued" || job.state === "running") watchRefresh(); }).catch(() => {});
 }
 
 api("/api/data" + query).then(render).catch((e) => status(e.message, true));

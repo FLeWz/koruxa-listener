@@ -1,4 +1,3 @@
-import atexit
 import logging
 import threading
 import time
@@ -10,8 +9,6 @@ from config import Config
 from core.cache import Cache
 from core.base import BaseService
 from core.browser import BrowserService
-from core.webproc import WebProcess
-from core.worker import start_worker
 
 from services.clan_bank import ClanBankService
 from services.player import PlayerService
@@ -120,21 +117,18 @@ def main():
 
     watcher = Watcher(config)
 
-    if config.enable_market:
-        # The web server is a separate Go process. It does not need Chrome, so it
-        # is up even if the browser is not open yet; refreshes go through the worker socket.
-        market = MarketService(config, watcher.cache)
+    # The web server is a separate process (web/). It talks to this one only through
+    # the database: it queues market refresh jobs, MarketService.serve_jobs() runs them.
+    market = MarketService(config, watcher.cache) if config.enable_market else None
 
-        start_worker(config, market)
-        web = WebProcess(config)
-        web.start()
-        atexit.register(web.stop)
+    if market and watcher.has_work():
+        threading.Thread(target=market.serve_jobs, name="market-jobs", daemon=True).start()
 
     if watcher.has_work():
         watcher.run()
-    elif config.enable_market:
-        logging.getLogger("main").info("No watcher services enabled. Only the market web server is running.")
-        threading.Event().wait()
+    elif market:
+        logging.getLogger("main").info("No watcher services enabled. Only market refresh requests are served.")
+        market.serve_jobs()
     else:
         logging.getLogger("main").error("All services are disabled. Nothing to run.")
 

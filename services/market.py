@@ -15,13 +15,15 @@ FIXED_PRICES = {"vial_of_water": 50}
 # Random pause (seconds) between API requests, to stay polite to the server.
 REQUEST_DELAY = (10, 20)
 
+# Seconds between checks of the job queue (also the worker heartbeat interval).
+JOB_POLL = 2
+
 
 class MarketService(BaseService):
     """Fetches recipes from the skill API and prices from the marketplace into SQLite.
 
     This is the part that needs Chrome. The Go web server (web/) reads the
-    results from the database and asks this service, through core/worker.py,
-    to refresh.
+    results from the database and queues refresh requests there for this service.
     """
 
     def __init__(self, config, cache):
@@ -32,9 +34,6 @@ class MarketService(BaseService):
         self.browser_service = BrowserService(config, cache)
 
         self.refresh_lock = threading.Lock()
-
-        self.jobs = {}  # skill -> {state, progress, error, started_at, finished_at}
-        self.jobs_lock = threading.Lock()
 
     # ---- fetching ----------------------------------------------------
 
@@ -109,43 +108,45 @@ class MarketService(BaseService):
                 lookups = [key for key in keys if key not in FIXED_PRICES]
 
                 for step, key in enumerate(lookups, start=1):
-                    self._set_job(skill, progress=f"{step}/{len(lookups)}")
+                    self.store.set_job_progress(skill, f"{step}/{len(lookups)}")
                     self._pause(step, len(lookups), key)
                     market[key] = self._lookup_price(page, key)
 
             self.store.save_skill(skill, recipes, market)
 
     # ---- refresh jobs ------------------------------------------------
-    # A refresh takes minutes, so the web server starts one and polls its status.
+    # A refresh takes minutes. The web server queues a row in refresh_jobs (see
+    # core/store.py); serve_jobs() picks it up, runs it and reports progress there.
 
-    def _set_job(self, skill, **fields):
-        with self.jobs_lock:
-            self.jobs.setdefault(skill, {"state": "idle"}).update(fields)
-
-    def job_status(self, skill):
-        with self.jobs_lock:
-            return dict(self.jobs.get(skill, {"state": "idle"}))
-
-    def start_refresh(self, skill):
-        """Start a refresh in the background. A refresh already running is reported, not doubled."""
-        with self.jobs_lock:
-            if any(job.get("state") == "running" for job in self.jobs.values()):
-                job = self.jobs.get(skill) or {}
-
-                return dict(job) if job.get("state") == "running" else {"state": "running", "progress": "another refresh is running"}
-
-            self.jobs[skill] = {"state": "running", "progress": "starting", "started_at": time.time(), "error": None}
-
-        threading.Thread(target=self._run_refresh, args=(skill,), name=f"refresh-{skill}", daemon=True).start()
-
-        return self.job_status(skill)
-
-    def _run_refresh(self, skill):
+    def _run_job(self, skill):
         try:
             self.refresh(skill)
         except Exception as error:
             self.logger.exception("Market refresh failed for %s", skill)
-            self._set_job(skill, state="error", error=str(error) or type(error).__name__, finished_at=time.time())
+            self.store.finish_job(skill, error=str(error) or type(error).__name__)
         else:
             self.logger.info("Market refresh done for %s", skill)
-            self._set_job(skill, state="done", progress="", finished_at=time.time())
+            self.store.finish_job(skill)
+
+    def serve_jobs(self):
+        """Run queued refresh jobs one at a time and keep the worker heartbeat. Never returns."""
+        self.store.fail_interrupted_jobs()
+        self.logger.info("Waiting for market refresh requests in %s", self.config.market_db)
+
+        job = None
+
+        while True:
+            try:
+                self.store.heartbeat()
+
+                if job is None or not job.is_alive():
+                    skill = self.store.claim_job()
+
+                    if skill:
+                        job = threading.Thread(target=self._run_job, args=(skill,), name=f"refresh-{skill}", daemon=True)
+                        job.start()
+
+            except Exception:
+                self.logger.exception("Job queue error")
+
+            time.sleep(JOB_POLL)

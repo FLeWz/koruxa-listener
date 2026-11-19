@@ -1,88 +1,76 @@
 package main
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
+	"database/sql"
 	"errors"
-	"io"
-	"net"
-	"net/http"
+	"strconv"
 	"time"
 )
 
-// Worker talks to the Python process over a Unix socket (HTTP over the socket).
-// The worker does the work that needs Chrome: market refreshes.
+// Worker is the Python process that does the work needing Chrome: market refreshes.
+// The two sides only talk through the database. A refresh is a row in refresh_jobs:
+// this side queues it, the worker runs it and writes the progress back. The worker
+// proves it is alive by updating meta.worker_heartbeat.
 type Worker struct {
-	client *http.Client
+	db *sql.DB
 }
 
 var errWorkerDown = errors.New("The worker is not running")
 
-func newWorker(socket string) *Worker {
-	return &Worker{client: &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "unix", socket)
-			},
-		},
-	}}
+// The worker beats every couple of seconds; this is how long a silence is tolerated.
+const heartbeatTimeout = 30 * time.Second
+
+func newWorker(db *sql.DB) *Worker { return &Worker{db: db} }
+
+// RefreshJob is the status of a refresh, as shown to the page.
+type RefreshJob struct {
+	State    string  `json:"state"` // idle, queued, running, done, error
+	Progress string  `json:"progress"`
+	Error    *string `json:"error"`
 }
 
-// call sends a request and returns the raw JSON answer.
-func (w *Worker) call(method, path string, body any) (json.RawMessage, error) {
-	var reader io.Reader
+func (w *Worker) alive() bool {
+	var value string
 
-	if body != nil {
-		raw, err := json.Marshal(body)
-		if err != nil {
-			return nil, err
-		}
-
-		reader = bytes.NewReader(raw)
+	if err := w.db.QueryRow(`SELECT value FROM meta WHERE key = 'worker_heartbeat'`).Scan(&value); err != nil {
+		return false
 	}
 
-	req, err := http.NewRequest(method, "http://worker"+path, reader)
-	if err != nil {
-		return nil, err
-	}
+	beat, err := strconv.ParseInt(value, 10, 64)
 
-	req.Header.Set("Content-Type", "application/json")
+	return err == nil && time.Since(time.Unix(beat, 0)) < heartbeatTimeout
+}
 
-	res, err := w.client.Do(req)
-	if err != nil {
+// startRefresh queues a refresh. One already queued or running for the skill is reported, not doubled.
+func (w *Worker) startRefresh(skill string) (*RefreshJob, error) {
+	if !w.alive() {
 		return nil, errWorkerDown
 	}
 
-	defer res.Body.Close()
-
-	data, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	_, err := w.db.Exec(`
+		INSERT INTO refresh_jobs (skill, state, progress, error, requested_at, started_at, finished_at)
+		VALUES (?, 'queued', 'queued', NULL, ?, NULL, NULL)
+		ON CONFLICT(skill) DO UPDATE SET
+			state = 'queued', progress = 'queued', error = NULL,
+			requested_at = excluded.requested_at, started_at = NULL, finished_at = NULL
+		WHERE refresh_jobs.state NOT IN ('queued', 'running')`,
+		skill, time.Now().Unix())
 	if err != nil {
 		return nil, err
 	}
 
-	if res.StatusCode >= 400 {
-		var failure struct {
-			Error string `json:"error"`
-		}
+	return w.refreshStatus(skill)
+}
 
-		json.Unmarshal(data, &failure)
+func (w *Worker) refreshStatus(skill string) (*RefreshJob, error) {
+	job := &RefreshJob{}
 
-		if failure.Error == "" {
-			failure.Error = "Worker error"
-		}
+	err := w.db.QueryRow(`SELECT state, progress, error FROM refresh_jobs WHERE skill = ?`, skill).
+		Scan(&job.State, &job.Progress, &job.Error)
 
-		return nil, userErr(failure.Error)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &RefreshJob{State: "idle"}, nil
 	}
 
-	return data, nil
-}
-
-func (w *Worker) startRefresh(skill string) (json.RawMessage, error) {
-	return w.call("POST", "/refresh", map[string]string{"skill": skill})
-}
-
-func (w *Worker) refreshStatus(skill string) (json.RawMessage, error) {
-	return w.call("GET", "/status?skill="+skill, nil)
+	return job, err
 }

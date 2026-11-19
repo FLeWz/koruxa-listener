@@ -2,11 +2,12 @@
 //
 // It only reads and writes the SQLite database, so it stays up when Chrome or
 // the Python worker is not running. Market refreshes are handed to the Python
-// worker over a Unix socket (see worker.go).
+// worker through the same database (see worker.go).
 package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -29,7 +30,27 @@ func env(key, fallback string) string {
 	return fallback
 }
 
-// The schema is created by the Python side (core/store.py) before this starts.
+// The schema is created by the Python side (core/store.py). At a first start both
+// run together, so wait for it to appear.
+func waitForSchema(db *sql.DB) error {
+	var found int
+
+	for i := 0; i < 60; i++ {
+		err := db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'refresh_jobs'`).Scan(&found)
+		if err == nil {
+			return nil
+		}
+
+		if i == 0 {
+			logf("INFO", "Waiting for the worker to create the database schema")
+		}
+
+		time.Sleep(time.Second)
+	}
+
+	return errors.New("the database has no schema: is the worker running?")
+}
+
 func openDB(path string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(30000)&_pragma=foreign_keys(1)")
 	if err != nil {
@@ -51,10 +72,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := waitForSchema(db); err != nil {
+		logf("ERROR", "%v", err)
+		os.Exit(1)
+	}
+
 	app := &App{
 		db:     db,
 		auth:   newAuth(db),
-		worker: newWorker(env("WORKER_SOCKET", "worker.sock")),
+		worker: newWorker(db),
 	}
 
 	server := &http.Server{
@@ -65,18 +91,6 @@ func main() {
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    16 << 10,
-	}
-
-	// Started by the Python process: do not outlive it.
-	if parent := os.Getppid(); env("KORUXA_PARENT", "") != "" {
-		go func() {
-			for range time.Tick(2 * time.Second) {
-				if os.Getppid() != parent {
-					logf("INFO", "Parent process is gone, shutting down")
-					os.Exit(0)
-				}
-			}
-		}()
 	}
 
 	logf("INFO", "Web server at http://%s/ (database %s)", addr, dbPath)
