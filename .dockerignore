@@ -1,0 +1,11 @@
+.git
+.env
+venv
+__pycache__
+db
+cache.json
+chrome.txt
+market.json
+web
+docker-compose.yml
+Dockerfile

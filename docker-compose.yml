@@ -1,0 +1,40 @@
+# Two containers that share one SQLite database in the "data" volume:
+#
+#   worker  Python: polls Koruxa, posts to Discord, runs market refreshes.
+#           Attaches to a Chrome you run yourself: set CHROME_CDP_URL in .env to
+#           its DevTools address, as an IP (for example http://192.168.1.10:9222).
+#   web     Go: login, market helper, tracker. Reads and writes the database only.
+#
+#   docker compose up -d --build
+
+name: koruxa-listener
+
+services:
+  worker:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      CACHE_FILE: /data/cache.json
+      MARKET_DB: /data/koruxa-listener.db
+    volumes:
+      - data:/data
+
+  web:
+    build: ./web
+    restart: unless-stopped
+    environment:
+      MARKET_DB: /data/koruxa-listener.db
+      MARKET_HOST: 0.0.0.0
+      MARKET_PORT: "8091"
+    # Published on localhost only. Set WEB_BIND=0.0.0.0 in .env to serve the network
+    # (put HTTPS in front of it first: the login is sent as plain HTTP otherwise).
+    ports:
+      - "${WEB_BIND:-127.0.0.1}:${MARKET_PORT:-8091}:8091"
+    volumes:
+      - data:/data
+    depends_on:
+      - worker
+
+volumes:
+  data:

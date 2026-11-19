@@ -6,5 +6,4 @@ chrome.txt
 market.json
 market.json.tmp
 db/
-worker.sock
 web/bin/

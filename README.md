@@ -16,18 +16,12 @@ Every `POLL_INTERVAL` seconds the watcher checks:
 Each service posts a Discord embed through `BaseService.notify()`.
 State is kept in a JSON cache file so events are not reported twice.
 
+
 ## Requirements
 
-- Python 3
-- Go 1.24+ and `make` (build the web server in `web/`)
-- Google Chrome (`google-chrome-stable` on PATH)
-- Python packages: `requests`, `python-dotenv`, `playwright`
-
-There is no `requirements.txt` yet. Install manually:
-
-    make venv
-
-or by hand: `python -m venv venv`, activate it, `pip install requests python-dotenv playwright`.
+- A Chrome with remote debugging that you run and log in to Koruxa yourself. The
+  worker only attaches to it (`CHROME_CDP_URL`); it never starts a browser.
+- Docker with Compose (easiest), or Python 3, Go 1.24+ and `make` to run it by hand.
 
 ## Configuration
 
@@ -38,7 +32,7 @@ below are required and must not be empty, except `ROLE_ID_*`.
 - `CACHE_FILE`: path of the JSON cache
 - `PUB_PLAYER_API_URL`, `PUB_PLAYER_API_TOKEN`
 - `PUB_CLAN_XP_API_URL`, `PUB_CLAN_BANK_API_URL`, `PUB_CLAN_API_TOKEN`
-- `CHROME_CDP_URL`: Chrome DevTools endpoint
+- `CHROME_CDP_URL`: DevTools endpoint of your Chrome, as an IP address
 - `PRIV_PLAYER_API_URL`, `PRIV_CLAN_BOSS_API_URL`
 - `CLAN_BANK_WEBHOOK`, `NODE_EVENTS_WEBHOOK`, `CLAN_BOSS_EVENT_WEBHOOK`,
   `GLOBAL_BUFFS_WEBHOOK`: Discord webhook URLs
@@ -49,33 +43,48 @@ Optional: `ROLE_ID_<NAME>` holds the Discord role ID to ping for a skill or
 
 Never commit `.env`. It is gitignored.
 
-## Run
+## Run with Docker
 
-    make run
+    docker compose up -d --build
 
-This builds the web server, activates `venv` (or uses the venv already active in
-your shell; `make run VENV=/path/to/venv` picks another) and starts `main.py`.
+Two containers share one SQLite database in the `data` volume (`/data`):
 
-On start the watcher launches Chrome with remote debugging on port 9222 and
-profile `~/.koruxa-bot-chrome`, opens Koruxa, and attaches via Playwright.
-Log in to Koruxa in that browser once. The private API calls reuse that
-authenticated session.
+- `worker`: the Python watcher. Polls Koruxa, posts to Discord, runs market refreshes.
+- `web`: the Go web server on `http://127.0.0.1:8091/` (`MARKET_PORT`, `WEB_BIND`).
+
+The worker reaches your browser at `CHROME_CDP_URL`. Inside a container `127.0.0.1` is the
+container itself, so set it to the IP of the machine running Chrome, for example
+`http://192.168.1.10:9222`. Chrome listens on `127.0.0.1` only by default, so the
+browser must be started so that it accepts connections on that address (for example
+`--remote-debugging-address=0.0.0.0`, or a port forward). Anything that can reach that
+port controls the browser and its Koruxa login: keep it on a trusted network.
+
+## Run without Docker
+
+    make run        # the worker (main.py), in the venv
+    make run-web    # the web server, reads .env
+
+`make venv` creates the venv from `requirements.txt`. Both processes must use the same
+`MARKET_DB`.
 
 ## Layout
 
-    main.py       watcher loop, starts the worker socket and the web server
+    main.py       watcher loop, starts the market job loop
     config.py     env config, role list, embed colors
-    core/         base service, browser, cache, Discord helper, SQLite store,
-                  worker socket (core/worker.py), Go process launcher (core/webproc.py)
+    core/         base service, browser attach, cache, Discord helper, SQLite store
     services/     one module per event source
     web/          Go web server: login, Herblore market, Herblore tracker, users
+    Dockerfile, web/Dockerfile, docker-compose.yml
 
-## Web server
+## Web server and the worker
 
-`make build` compiles `web/` to `web/bin/koruxa-web`. `main.py` starts it as a child process and logs its output.
-The web server only needs the SQLite database (`MARKET_DB`), so it is up even when Chrome
-is not open. Market refreshes need Chrome: the web server asks the Python process for them
-over the Unix socket `WORKER_SOCKET`. Set `ENABLE_MARKET_HELPER_WEB=false` to not start it.
+The web server and the worker only talk through the database. A market refresh takes
+minutes, so the web server queues a row in `refresh_jobs`, the worker picks it up, runs it
+and writes the progress back, and the page polls the status. The worker also updates
+`meta.worker_heartbeat`; without a recent beat the web server answers "The worker is not
+running" instead of queueing. The web server does not need Chrome, so the pages work
+even when the browser or the worker is down. `ENABLE_MARKET_HELPER_WEB=false` stops the
+worker from answering refresh requests.
 
 The first account created at `/login` on an empty database is the admin.
 
