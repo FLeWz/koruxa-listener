@@ -52,12 +52,14 @@ Two containers share one SQLite database in the `data` volume (`/data`):
 - `worker`: the Python watcher. Polls Koruxa, posts to Discord, runs market refreshes.
 - `web`: the Go web server on `http://127.0.0.1:8091/` (`MARKET_PORT`, `WEB_BIND`).
 
-The worker reaches your browser at `CHROME_CDP_URL`. Inside a container `127.0.0.1` is the
-container itself, so set it to the IP of the machine running Chrome, for example
-`http://192.168.1.10:9222`. Chrome listens on `127.0.0.1` only by default, so the
-browser must be started so that it accepts connections on that address (for example
-`--remote-debugging-address=0.0.0.0`, or a port forward). Anything that can reach that
-port controls the browser and its Koruxa login: keep it on a trusted network.
+The worker reaches your browser at `CHROME_CDP_URL`. Headful Chrome ignores
+`--remote-debugging-address` and always listens on `127.0.0.1`, so the worker runs on the
+host network (`network_mode: host`) and uses `http://127.0.0.1:9222`. Start Chrome as before:
+
+    google-chrome-stable --remote-debugging-port=9222 --user-data-dir="$HOME/.koruxa-bot-chrome" https://koruxa.com/
+
+The debugging port stays on localhost. Anything that can reach it controls the browser and
+its Koruxa login, so do not forward it to the network.
 
 ## Run without Docker
 

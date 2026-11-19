@@ -1,8 +1,10 @@
 # Two containers that share one SQLite database in the "data" volume:
 #
 #   worker  Python: polls Koruxa, posts to Discord, runs market refreshes.
-#           Attaches to a Chrome you run yourself: set CHROME_CDP_URL in .env to
-#           its DevTools address, as an IP (for example http://192.168.1.10:9222).
+#           Runs on the host network so that CHROME_CDP_URL=http://127.0.0.1:9222 reaches
+#           the Chrome you run yourself. Headful Chrome ignores
+#           --remote-debugging-address and listens on 127.0.0.1 only, so a bridged
+#           container could not reach it without a forward.
 #   web     Go: login, market helper, tracker. Reads and writes the database only.
 #
 #   docker compose up -d --build
@@ -13,6 +15,7 @@ services:
   worker:
     build: .
     restart: unless-stopped
+    network_mode: host
     env_file: .env
     environment:
       CACHE_FILE: /data/cache.json
