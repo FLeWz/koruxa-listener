@@ -277,7 +277,8 @@ func (a *App) trackerView(skill string) (*TrackerView, error) {
 			}
 		}
 
-		s.Left = s.TotalReceived - s.Planted
+		// Harvests can give more seeds, so more can be planted than were received.
+		s.Left = max(s.TotalReceived-s.Planted, 0)
 		seeds[orderID] = append(seeds[orderID], s)
 	}
 
@@ -636,15 +637,6 @@ func actAddSeed(tx *sql.Tx, body map[string]any, a *App, skill string) (any, err
 	return inserted(tx.Exec("INSERT INTO seeds (order_id, item_key, total_received, created_at) VALUES (?, ?, ?, ?)", orderID, key, total, now()))
 }
 
-// planted sums the planting segments of a seed, optionally leaving one out.
-func planted(tx *sql.Tx, seedID, exclude int64) (int64, error) {
-	var sum int64
-
-	err := tx.QueryRow("SELECT COALESCE(SUM(planted), 0) FROM plantings WHERE seed_id = ? AND id IS NOT ?", seedID, exclude).Scan(&sum)
-
-	return sum, err
-}
-
 func actSetSeedTotal(tx *sql.Tx, body map[string]any, a *App, skill string) (any, error) {
 	id, err := wholeNumber(body["id"], "Id", 1)
 	if err != nil {
@@ -658,15 +650,6 @@ func actSetSeedTotal(tx *sql.Tx, body map[string]any, a *App, skill string) (any
 
 	if err := exists(tx, "seeds", id, "Seeds"); err != nil {
 		return nil, err
-	}
-
-	sum, err := planted(tx, id, 0)
-	if err != nil {
-		return nil, err
-	}
-
-	if total < sum {
-		return nil, userErr("Total received is less than already planted")
 	}
 
 	_, err = tx.Exec("UPDATE seeds SET total_received = ? WHERE id = ?", total, id)
@@ -696,21 +679,9 @@ func actAddPlanting(tx *sql.Tx, body map[string]any, a *App, skill string) (any,
 		harvested = sql.NullInt64{Int64: n, Valid: true}
 	}
 
-	var received int64
-
-	if err := tx.QueryRow("SELECT total_received FROM seeds WHERE id = ?", seedID).Scan(&received); err == sql.ErrNoRows {
-		return nil, userErr("Seeds not found")
-	} else if err != nil {
+	// Harvests can give more seeds, so planting is not limited by the seeds received.
+	if err := exists(tx, "seeds", seedID, "Seeds"); err != nil {
 		return nil, err
-	}
-
-	sum, err := planted(tx, seedID, 0)
-	if err != nil {
-		return nil, err
-	}
-
-	if sum+count > received {
-		return nil, userErr("Planted more seeds than received")
 	}
 
 	return inserted(tx.Exec("INSERT INTO plantings (seed_id, planted, harvested, created_at) VALUES (?, ?, ?, ?)", seedID, count, harvested, now()))
@@ -722,10 +693,10 @@ func actSetPlanting(tx *sql.Tx, body map[string]any, a *App, skill string) (any,
 		return nil, err
 	}
 
-	var seedID, count int64
+	var count int64
 	var harvested sql.NullInt64
 
-	if err := tx.QueryRow("SELECT seed_id, planted, harvested FROM plantings WHERE id = ?", id).Scan(&seedID, &count, &harvested); err == sql.ErrNoRows {
+	if err := tx.QueryRow("SELECT planted, harvested FROM plantings WHERE id = ?", id).Scan(&count, &harvested); err == sql.ErrNoRows {
 		return nil, userErr("Planting not found")
 	} else if err != nil {
 		return nil, err
@@ -734,21 +705,6 @@ func actSetPlanting(tx *sql.Tx, body map[string]any, a *App, skill string) (any,
 	if v, has := body["planted"]; has {
 		if count, err = wholeNumber(v, "Planted", 1); err != nil {
 			return nil, err
-		}
-
-		var received int64
-
-		if err := tx.QueryRow("SELECT total_received FROM seeds WHERE id = ?", seedID).Scan(&received); err != nil {
-			return nil, err
-		}
-
-		sum, err := planted(tx, seedID, id)
-		if err != nil {
-			return nil, err
-		}
-
-		if sum+count > received {
-			return nil, userErr("Planted more seeds than received")
 		}
 	}
 
