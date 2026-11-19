@@ -88,8 +88,6 @@ class MarketService(BaseService):
 
     def refresh(self, skill):
         with self.refresh_lock:
-            self.browser_service.ensure_running()
-
             with sync_playwright() as playwright:
                 _, page = self.browser_service.connect(playwright)
 

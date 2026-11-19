@@ -39,8 +39,6 @@ class Watcher(BaseService):
 
     def connect_browser(self, playwright):
         if self.browser is None or self.page is None or self.page.is_closed():
-            self.browser_service.ensure_running()
-
             self.browser, self.page = self.browser_service.connect(playwright)
 
             self.logger.info("Connected to authenticated Koruxa tab.")
