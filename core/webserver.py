@@ -67,6 +67,7 @@ PAGE = """<!doctype html>
   </thead>
   <tbody id="recipes"></tbody>
 </table>
+      <th class="num grp" title="Best Gold/h (regular or double drop) x 24">Gold/day</th>
 
 <div class="side">
   <div>
@@ -185,6 +186,9 @@ function render(data) {
   }
 
   fillPriceTable("items", data.items);
+    const rates = [r.gold_per_hour, r.gold_per_hour_double].filter((g) => g !== null && g !== undefined);
+    const perDay = rates.length ? Math.max(...rates) * 24 : null;
+    tr.append(money(perDay, " grp"));
   fillPriceTable("potions", data.potions);
 }
 
