@@ -165,7 +165,7 @@ func nullInt(v sql.NullInt64) *int64 {
 	return &v.Int64
 }
 
-func (a *App) trackerView(skill string) (*TrackerView, error) {
+func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 	potions, err := a.potions(skill)
 	if err != nil {
 		return nil, err
@@ -187,7 +187,7 @@ func (a *App) trackerView(skill string) (*TrackerView, error) {
 	var players []PlayerOut
 	var orders []orderRow
 
-	rows, err := a.db.Query("SELECT id, name FROM players ORDER BY name")
+	rows, err := a.db.Query("SELECT id, name FROM players WHERE user_id = ? ORDER BY name", uid)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +204,7 @@ func (a *App) trackerView(skill string) (*TrackerView, error) {
 
 	rows.Close()
 
-	rows, err = a.db.Query("SELECT id, player_id, potion_key, quantity FROM orders ORDER BY id")
+	rows, err = a.db.Query("SELECT id, player_id, potion_key, quantity FROM orders WHERE player_id IN (SELECT id FROM players WHERE user_id = ?) ORDER BY id", uid)
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +429,7 @@ func (a *App) trackerView(skill string) (*TrackerView, error) {
 
 // ---- actions ---------------------------------------------------------
 
-type actionFn func(tx *sql.Tx, body map[string]any, a *App, skill string) (any, error)
+type actionFn func(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error)
 
 var trackerActions = map[string]actionFn{
 	"add_player":      actAddPlayer,
@@ -447,7 +447,7 @@ var trackerActions = map[string]actionFn{
 	"delete_drop":     deleter("drops", "Drop"),
 }
 
-func (a *App) trackerAction(action string, body map[string]any, skill string) (any, error) {
+func (a *App) trackerAction(uid int64, action string, body map[string]any, skill string) (any, error) {
 	fn, ok := trackerActions[action]
 	if !ok {
 		return nil, notFoundError("Unknown action")
@@ -460,7 +460,7 @@ func (a *App) trackerAction(action string, body map[string]any, skill string) (a
 
 	defer tx.Rollback()
 
-	result, err := fn(tx, body, a, skill)
+	result, err := fn(tx, uid, body, a, skill)
 	if err != nil {
 		return nil, err
 	}
@@ -476,10 +476,26 @@ func (a *App) trackerAction(action string, body map[string]any, skill string) (a
 	return result, nil
 }
 
-func exists(tx *sql.Tx, table string, id int64, label string) error {
+// Trackers are per user. ownedBy gives, for each tracker table, the condition (an id and a
+// user id placeholder) that matches a row only when it belongs to that user: directly, or
+// through its player and order. Every id that comes from the page goes through it, because
+// ids are easy to guess. A row of someone else looks the same as a missing one.
+const userOrders = "SELECT o.id FROM orders o JOIN players p ON p.id = o.player_id WHERE p.user_id = ?"
+
+var ownedBy = map[string]string{
+	"players":       "id = ? AND user_id = ?",
+	"arcana_prices": "id = ? AND user_id = ?",
+	"orders":        "id = ? AND player_id IN (SELECT id FROM players WHERE user_id = ?)",
+	"seeds":         "id = ? AND order_id IN (" + userOrders + ")",
+	"plantings":     "id = ? AND seed_id IN (SELECT id FROM seeds WHERE order_id IN (" + userOrders + "))",
+	"drops":         "id = ? AND order_id IN (" + userOrders + ")",
+	"potions_given": "id = ? AND order_id IN (" + userOrders + ")",
+}
+
+func exists(tx *sql.Tx, uid int64, table string, id int64, label string) error {
 	var one int
 
-	err := tx.QueryRow("SELECT 1 FROM "+table+" WHERE id = ?", id).Scan(&one)
+	err := tx.QueryRow("SELECT 1 FROM "+table+" WHERE "+ownedBy[table], id, uid).Scan(&one)
 	if err == sql.ErrNoRows {
 		return userErr(label + " not found")
 	}
@@ -488,13 +504,13 @@ func exists(tx *sql.Tx, table string, id int64, label string) error {
 }
 
 func deleter(table, label string) actionFn {
-	return func(tx *sql.Tx, body map[string]any, a *App, skill string) (any, error) {
+	return func(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
 		id, err := wholeNumber(body["id"], "Id", 1)
 		if err != nil {
 			return nil, err
 		}
 
-		res, err := tx.Exec("DELETE FROM "+table+" WHERE id = ?", id)
+		res, err := tx.Exec("DELETE FROM "+table+" WHERE "+ownedBy[table], id, uid)
 		if err != nil {
 			return nil, err
 		}
@@ -517,7 +533,7 @@ func inserted(res sql.Result, err error) (any, error) {
 	return map[string]any{"id": id}, err
 }
 
-func actAddPlayer(tx *sql.Tx, body map[string]any, a *App, skill string) (any, error) {
+func actAddPlayer(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
 	name, ok := body["name"].(string)
 	if !ok || strings.TrimSpace(name) == "" {
 		return nil, userErr("Player name is required")
@@ -529,7 +545,7 @@ func actAddPlayer(tx *sql.Tx, body map[string]any, a *App, skill string) (any, e
 		return nil, userErr("Player name is too long")
 	}
 
-	res, err := tx.Exec("INSERT INTO players (name, created_at) VALUES (?, ?)", name, now())
+	res, err := tx.Exec("INSERT INTO players (user_id, name, created_at) VALUES (?, ?, ?)", uid, name, now())
 	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
 		return nil, userErr("Player already exists")
 	}
@@ -537,7 +553,7 @@ func actAddPlayer(tx *sql.Tx, body map[string]any, a *App, skill string) (any, e
 	return inserted(res, err)
 }
 
-func actAddOrder(tx *sql.Tx, body map[string]any, a *App, skill string) (any, error) {
+func actAddOrder(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
 	playerID, err := wholeNumber(body["player_id"], "Player", 1)
 	if err != nil {
 		return nil, err
@@ -557,7 +573,7 @@ func actAddOrder(tx *sql.Tx, body map[string]any, a *App, skill string) (any, er
 		return nil, err
 	}
 
-	if err := exists(tx, "players", playerID, "Player"); err != nil {
+	if err := exists(tx, uid, "players", playerID, "Player"); err != nil {
 		return nil, err
 	}
 
@@ -584,7 +600,7 @@ func actAddOrder(tx *sql.Tx, body map[string]any, a *App, skill string) (any, er
 	))
 }
 
-func actAddGiven(tx *sql.Tx, body map[string]any, a *App, skill string) (any, error) {
+func actAddGiven(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
 	orderID, err := wholeNumber(body["order_id"], "Request", 1)
 	if err != nil {
 		return nil, err
@@ -597,7 +613,7 @@ func actAddGiven(tx *sql.Tx, body map[string]any, a *App, skill string) (any, er
 
 	var limit, total int64
 
-	if err := tx.QueryRow("SELECT quantity FROM orders WHERE id = ?", orderID).Scan(&limit); err == sql.ErrNoRows {
+	if err := tx.QueryRow("SELECT quantity FROM orders WHERE "+ownedBy["orders"], orderID, uid).Scan(&limit); err == sql.ErrNoRows {
 		return nil, userErr("Request not found")
 	} else if err != nil {
 		return nil, err
@@ -614,7 +630,7 @@ func actAddGiven(tx *sql.Tx, body map[string]any, a *App, skill string) (any, er
 	return inserted(tx.Exec("INSERT INTO potions_given (order_id, quantity, created_at) VALUES (?, ?, ?)", orderID, quantity, now()))
 }
 
-func actAddSeed(tx *sql.Tx, body map[string]any, a *App, skill string) (any, error) {
+func actAddSeed(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
 	orderID, err := wholeNumber(body["order_id"], "Request", 1)
 	if err != nil {
 		return nil, err
@@ -630,14 +646,14 @@ func actAddSeed(tx *sql.Tx, body map[string]any, a *App, skill string) (any, err
 		return nil, err
 	}
 
-	if err := exists(tx, "orders", orderID, "Request"); err != nil {
+	if err := exists(tx, uid, "orders", orderID, "Request"); err != nil {
 		return nil, err
 	}
 
 	return inserted(tx.Exec("INSERT INTO seeds (order_id, item_key, total_received, created_at) VALUES (?, ?, ?, ?)", orderID, key, total, now()))
 }
 
-func actSetSeedTotal(tx *sql.Tx, body map[string]any, a *App, skill string) (any, error) {
+func actSetSeedTotal(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
 	id, err := wholeNumber(body["id"], "Id", 1)
 	if err != nil {
 		return nil, err
@@ -648,7 +664,7 @@ func actSetSeedTotal(tx *sql.Tx, body map[string]any, a *App, skill string) (any
 		return nil, err
 	}
 
-	if err := exists(tx, "seeds", id, "Seeds"); err != nil {
+	if err := exists(tx, uid, "seeds", id, "Seeds"); err != nil {
 		return nil, err
 	}
 
@@ -657,7 +673,7 @@ func actSetSeedTotal(tx *sql.Tx, body map[string]any, a *App, skill string) (any
 	return nil, err
 }
 
-func actAddPlanting(tx *sql.Tx, body map[string]any, a *App, skill string) (any, error) {
+func actAddPlanting(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
 	seedID, err := wholeNumber(body["seed_id"], "Seeds", 1)
 	if err != nil {
 		return nil, err
@@ -680,14 +696,14 @@ func actAddPlanting(tx *sql.Tx, body map[string]any, a *App, skill string) (any,
 	}
 
 	// Harvests can give more seeds, so planting is not limited by the seeds received.
-	if err := exists(tx, "seeds", seedID, "Seeds"); err != nil {
+	if err := exists(tx, uid, "seeds", seedID, "Seeds"); err != nil {
 		return nil, err
 	}
 
 	return inserted(tx.Exec("INSERT INTO plantings (seed_id, planted, harvested, created_at) VALUES (?, ?, ?, ?)", seedID, count, harvested, now()))
 }
 
-func actSetPlanting(tx *sql.Tx, body map[string]any, a *App, skill string) (any, error) {
+func actSetPlanting(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
 	id, err := wholeNumber(body["id"], "Id", 1)
 	if err != nil {
 		return nil, err
@@ -696,7 +712,7 @@ func actSetPlanting(tx *sql.Tx, body map[string]any, a *App, skill string) (any,
 	var count int64
 	var harvested sql.NullInt64
 
-	if err := tx.QueryRow("SELECT planted, harvested FROM plantings WHERE id = ?", id).Scan(&count, &harvested); err == sql.ErrNoRows {
+	if err := tx.QueryRow("SELECT planted, harvested FROM plantings WHERE "+ownedBy["plantings"], id, uid).Scan(&count, &harvested); err == sql.ErrNoRows {
 		return nil, userErr("Planting not found")
 	} else if err != nil {
 		return nil, err
@@ -726,7 +742,7 @@ func actSetPlanting(tx *sql.Tx, body map[string]any, a *App, skill string) (any,
 	return nil, err
 }
 
-func actAddDrop(tx *sql.Tx, body map[string]any, a *App, skill string) (any, error) {
+func actAddDrop(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
 	orderID, err := wholeNumber(body["order_id"], "Request", 1)
 	if err != nil {
 		return nil, err
@@ -758,7 +774,7 @@ func actAddDrop(tx *sql.Tx, body map[string]any, a *App, skill string) (any, err
 		price = sql.NullFloat64{Float64: f, Valid: true}
 	}
 
-	if err := exists(tx, "orders", orderID, "Request"); err != nil {
+	if err := exists(tx, uid, "orders", orderID, "Request"); err != nil {
 		return nil, err
 	}
 

@@ -348,7 +348,7 @@ func (a *App) get(q *req) {
 
 	case "/api/arcana":
 		if q.requireUser(false) {
-			view, err := a.arcanaView()
+			view, err := a.arcanaView(q.user.ID)
 			if err != nil {
 				q.handleErr(err)
 				return
@@ -393,7 +393,7 @@ func (a *App) get(q *req) {
 
 			q.json(200, view)
 		} else {
-			view, err := a.trackerView(skill)
+			view, err := a.trackerView(q.user.ID, skill)
 			if err != nil {
 				q.handleErr(err)
 				return
@@ -588,7 +588,7 @@ func (a *App) post(q *req) {
 			return
 		}
 
-		result, err := a.arcanaAction(strings.TrimPrefix(path, "/api/arcana/"), body)
+		result, err := a.arcanaAction(q.user.ID, strings.TrimPrefix(path, "/api/arcana/"), body)
 		if err != nil {
 			q.handleErr(err)
 		} else {
@@ -612,7 +612,7 @@ func (a *App) post(q *req) {
 			return
 		}
 
-		result, err := a.trackerAction(strings.TrimPrefix(path, "/api/tracker/"), body, skill)
+		result, err := a.trackerAction(q.user.ID, strings.TrimPrefix(path, "/api/tracker/"), body, skill)
 		if err != nil {
 			q.handleErr(err)
 		} else {

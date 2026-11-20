@@ -75,7 +75,7 @@ its Koruxa login, so do not forward it to the network.
     config.py     env config, role list, embed colors
     core/         base service, browser attach, cache, Discord helper, SQLite store
     services/     one module per event source
-    web/          Go web server: login, Herblore market, Herblore tracker, users
+    web/          Go web server: login, Herblore market, Herblore and Arcana trackers (per user), users
     Dockerfile, web/Dockerfile, docker-compose.yml
 
 ## Web server and the worker

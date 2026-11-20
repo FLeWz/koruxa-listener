@@ -36,7 +36,11 @@ func waitForSchema(db *sql.DB) error {
 	var found int
 
 	for i := 0; i < 60; i++ {
-		err := db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'refresh_jobs'`).Scan(&found)
+		// The schema exists and the trackers are per user (the worker migrates older databases).
+		err := db.QueryRow(`
+			SELECT 1 WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'refresh_jobs')
+			AND EXISTS (SELECT 1 FROM pragma_table_info('players') WHERE name = 'user_id')
+			AND EXISTS (SELECT 1 FROM pragma_table_info('arcana_prices') WHERE name = 'user_id')`).Scan(&found)
 		if err == nil {
 			return nil
 		}

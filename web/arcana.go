@@ -5,7 +5,7 @@ import "math"
 // Arcana sell tracker: a list of sale prices, their sum and 20% of the sum.
 //
 // Prices are typed in millions (500.6 is 500.6M) and stored as whole gold, so the
-// sum is exact. The list is shared by every logged-in user and has no size limit.
+// sum is exact. Every user has their own list, with no limit on its size.
 
 const (
 	goldPerMillion   = 1_000_000
@@ -13,8 +13,8 @@ const (
 	shareDivisor     = 5         // 20%
 )
 
-func (a *App) arcanaView() (any, error) {
-	rows, err := a.db.Query("SELECT id, price FROM arcana_prices ORDER BY id DESC")
+func (a *App) arcanaView(uid int64) (any, error) {
+	rows, err := a.db.Query("SELECT id, price FROM arcana_prices WHERE user_id = ? ORDER BY id DESC", uid)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func goldFromMillions(v any) (int64, error) {
 	return int64(math.Round(f * goldPerMillion)), nil
 }
 
-func (a *App) arcanaAction(action string, body map[string]any) (any, error) {
+func (a *App) arcanaAction(uid int64, action string, body map[string]any) (any, error) {
 	tx, err := a.db.Begin()
 	if err != nil {
 		return nil, err
@@ -94,18 +94,18 @@ func (a *App) arcanaAction(action string, body map[string]any) (any, error) {
 		}
 
 		for _, gold := range golds {
-			if _, err := tx.Exec("INSERT INTO arcana_prices (price, created_at) VALUES (?, ?)", gold, now()); err != nil {
+			if _, err := tx.Exec("INSERT INTO arcana_prices (user_id, price, created_at) VALUES (?, ?, ?)", uid, gold, now()); err != nil {
 				return nil, err
 			}
 		}
 
 	case "delete":
-		if _, err := deleter("arcana_prices", "Price")(tx, body, a, ""); err != nil {
+		if _, err := deleter("arcana_prices", "Price")(tx, uid, body, a, ""); err != nil {
 			return nil, err
 		}
 
 	case "clear":
-		if _, err := tx.Exec("DELETE FROM arcana_prices"); err != nil {
+		if _, err := tx.Exec("DELETE FROM arcana_prices WHERE user_id = ?", uid); err != nil {
 			return nil, err
 		}
 
@@ -117,5 +117,5 @@ func (a *App) arcanaAction(action string, body map[string]any) (any, error) {
 		return nil, err
 	}
 
-	return a.arcanaView()
+	return a.arcanaView(uid)
 }

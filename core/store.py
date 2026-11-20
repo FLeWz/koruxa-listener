@@ -61,18 +61,22 @@ CREATE TABLE IF NOT EXISTS refresh_jobs (
     finished_at  INTEGER
 );
 
--- Arcana sell tracker: sale prices in whole gold (500.6M is 500600000)
+-- Arcana sell tracker: sale prices in whole gold (500.6M is 500600000). One list per user.
 CREATE TABLE IF NOT EXISTS arcana_prices (
     id         INTEGER PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     price      INTEGER NOT NULL,
     created_at TEXT NOT NULL
 );
 
--- Potion crafting tracker
+-- Potion crafting tracker. Players belong to a user; orders, seeds, plantings, drops and
+-- hand-overs belong to a user through their player. A name is unique per user.
 CREATE TABLE IF NOT EXISTS players (
     id         INTEGER PRIMARY KEY,
-    name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    created_at TEXT NOT NULL
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL COLLATE NOCASE,
+    created_at TEXT NOT NULL,
+    UNIQUE (user_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS orders (
@@ -159,6 +163,8 @@ class Store:
                 )
                 db.execute("ALTER TABLE orders DROP COLUMN given")
 
+        self._migrate_owners()
+
         if legacy_json is not None:
             self._migrate_json(legacy_json)
 
@@ -174,6 +180,86 @@ class Store:
         except BaseException:
             db.rollback()
             raise
+        finally:
+            db.close()
+
+    # ---- per-user trackers -------------------------------------------
+
+    # Trackers used to be shared by everyone. A database from that time has players and
+    # arcana_prices without user_id. SQLite cannot change a UNIQUE constraint in place, so
+    # both tables are rebuilt (the documented 12-step way) and every existing row goes to
+    # the first admin. Runs once: afterwards the column exists.
+    OWNED_TABLES = {
+        "players": (
+            "CREATE TABLE players_new ("
+            " id INTEGER PRIMARY KEY,"
+            " user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,"
+            " name TEXT NOT NULL COLLATE NOCASE,"
+            " created_at TEXT NOT NULL,"
+            " UNIQUE (user_id, name))",
+            "INSERT INTO players_new (id, user_id, name, created_at) SELECT id, ?, name, created_at FROM players",
+        ),
+        "arcana_prices": (
+            "CREATE TABLE arcana_prices_new ("
+            " id INTEGER PRIMARY KEY,"
+            " user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,"
+            " price INTEGER NOT NULL,"
+            " created_at TEXT NOT NULL)",
+            "INSERT INTO arcana_prices_new (id, user_id, price, created_at) SELECT id, ?, price, created_at FROM arcana_prices",
+        ),
+    }
+
+    def _migrate_owners(self):
+        # Own connection: foreign keys must be off while tables are swapped, and that
+        # pragma does not work inside a transaction.
+        db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+        db.row_factory = sqlite3.Row
+
+        try:
+            todo = [
+                table
+                for table in self.OWNED_TABLES
+                if "user_id" not in {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+            ]
+
+            if not todo:
+                return
+
+            owner = db.execute("SELECT id FROM users ORDER BY is_admin DESC, id LIMIT 1").fetchone()
+            rows = {table: db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in todo}
+
+            if owner is None and any(rows.values()):
+                raise RuntimeError("Tracker data exists but there is no user to give it to")
+
+            owner_id = owner["id"] if owner else None
+
+            db.execute("PRAGMA foreign_keys = OFF")
+            db.execute("BEGIN IMMEDIATE")
+
+            try:
+                for table in todo:
+                    create, copy = self.OWNED_TABLES[table]
+
+                    db.execute(create)
+                    db.execute(copy, (owner_id,))
+                    db.execute(f"DROP TABLE {table}")
+                    db.execute(f"ALTER TABLE {table}_new RENAME TO {table}")
+
+                broken = db.execute("PRAGMA foreign_key_check").fetchall()
+
+                if broken:
+                    raise RuntimeError(f"Per-user migration left {len(broken)} broken foreign key(s)")
+
+                db.execute("COMMIT")
+            except BaseException:
+                db.execute("ROLLBACK")
+                raise
+
+            logger.info(
+                "Tracker data is now per user: %s given to user %s",
+                ", ".join(f"{rows[t]} row(s) of {t}" for t in todo),
+                owner_id,
+            )
         finally:
             db.close()
 
