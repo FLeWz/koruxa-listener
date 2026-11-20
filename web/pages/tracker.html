@@ -21,6 +21,7 @@
   .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin: .6rem 0; }
   .card { border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin-bottom: 1.2rem; background: var(--surface); }
   .seed { border-left: 3px solid var(--border-strong); padding-left: .8rem; margin: .8rem 0; }
+  .log { max-height: 12rem; overflow-y: auto; margin-bottom: .5rem; }
   .muted { color: var(--muted); }
   .ok { color: var(--ok); }
   .none { color: var(--danger); }
@@ -30,8 +31,11 @@
 <body>
 <!--NAV-->
 <main>
-<h1>Herblore tracker</h1>
-<p><span id="status" class="muted"></span></p>
+<h1 id="title">Herblore tracker</h1>
+<p>
+  <!--REFRESH-->
+  <span id="status" class="muted"></span>
+</p>
 
 <div class="row">
   <input id="newPlayer" class="name" type="text" maxlength="64" placeholder="Player name">
@@ -52,6 +56,22 @@
 <script>
 const skill = new URLSearchParams(location.search).get("skill") || "herblore";
 const $ = (id) => document.getElementById(id);
+
+// Herblore hands over potions made from seeds and drops. Alchemy sends items every day and
+// has no seeds. The page is the same; only the words and the seeds section differ.
+const isHerblore = skill === "herblore";
+const skillName = skill.charAt(0).toUpperCase() + skill.slice(1);
+const L = isHerblore ? {
+  things: "Potions", requested: "Requested potion", given: "Potions given", add: "Add given",
+  placeholder: "newly crafted", log: "Handed over", drops: "Monster drops", addDrops: "Add drops",
+  none: "No potions known. Press refresh on the Herblore market page first.",
+} : {
+  things: "Items", requested: "Requested recipe", given: "Items sent", add: "Add sent",
+  placeholder: "sent today", log: "Sent", drops: "Provided items", addDrops: "Add items",
+  none: "No recipes known yet. The admin can press Refresh recipes.",
+};
+$("title").textContent = skillName + " tracker";
+document.title = skillName + " tracker";
 const fmt = (n) => (n === null || n === undefined) ? "-" : Number(n).toLocaleString();
 
 let data = null;
@@ -210,27 +230,44 @@ function renderOrder(o) {
   // Potions handed to the player. Unlimited requests: output follows from the ingredients.
   // Each entry is a newly handed-over batch; the total is their sum.
   const given = el("div", undefined, "row");
-  given.append(el("strong", "Potions given: " + fmt(o.given)));
+  given.append(el("strong", L.given + ": " + fmt(o.given)));
   if (o.quantity === 0) given.append(el("span", "can make " + fmt(o.possible), "muted"));
   given.append(el("span", "left to give " + fmt(o.remaining), (o.remaining !== null && o.remaining < 0 ? "none" : "muted")));
   card.append(given);
 
   const giveForm = el("div", undefined, "row");
-  const giveQty = numInput("newly crafted");
+  const giveQty = numInput(L.placeholder);
   giveQty.style.width = "9rem";
-  giveForm.append(giveQty, button("Add given", () => act("add_given", {order_id: o.id, quantity: num(giveQty)})));
+  giveForm.append(giveQty, button(L.add, () => act("add_given", {order_id: o.id, quantity: num(giveQty)})));
   card.append(giveForm);
+
+  // Every entry with its date, newest first. Their sum is what is deducted from the request.
+  if (o.gives.length) {
+    const log = el("div", undefined, "log");
+    const t = table([[L.log], ["Quantity", true], [""]]);
+    for (const g of [...o.gives].reverse()) {
+      const tr = el("tr");
+      tr.append(el("td", new Date(g.date).toLocaleString()));
+      tr.append(el("td", fmt(g.quantity), "num"));
+      const del = el("td");
+      del.append(confirmDelete("this entry", "delete_given", g.id));
+      tr.append(del);
+      t.tBodies[0].append(tr);
+    }
+    log.append(t);
+    card.append(log);
+  }
 
   const ingredientOptions = o.ingredients.map((i) => [i.item_key, i.name]);
 
   // Needed vs received per ingredient
   if (o.ingredients.length) {
-    const t = table([["Ingredient"], ["Needed", true], ["From seeds", true], ["Drops", true], ["Have", true], ["Potions", true]]);
+    const t = table([["Ingredient"], ["Needed", true], ...(isHerblore ? [["From seeds", true]] : []), ["Provided", true], ["Have", true], [L.things, true]]);
     for (const i of o.ingredients) {
       const tr = el("tr");
       tr.append(el("td", i.name));
       tr.append(el("td", fmt(i.needed), "num"));
-      tr.append(el("td", fmt(i.from_seeds), "num"));
+      if (isHerblore) tr.append(el("td", fmt(i.from_seeds), "num"));
       tr.append(el("td", fmt(i.from_drops), "num"));
       const short = i.needed !== null && i.have < i.needed;
       tr.append(el("td", fmt(i.have), "num " + (i.needed === null ? "" : (short ? "none" : "ok"))));
@@ -240,17 +277,19 @@ function renderOrder(o) {
     card.append(t);
   }
 
-  card.append(el("strong", "Seeds"));
-  o.seeds.forEach((s) => card.append(renderSeed(o, s)));
-  const seedForm = el("div", undefined, "row");
-  const seedItem = select(ingredientOptions);
-  const seedTotal = numInput("total received");
-  seedForm.append(seedItem, seedTotal, button("Add seeds", () => act("add_seed", {
-    order_id: o.id, item_key: seedItem.value, total_received: num(seedTotal),
-  })));
-  card.append(seedForm);
+  if (isHerblore) {
+    card.append(el("strong", "Seeds"));
+    o.seeds.forEach((s) => card.append(renderSeed(o, s)));
+    const seedForm = el("div", undefined, "row");
+    const seedItem = select(ingredientOptions);
+    const seedTotal = numInput("total received");
+    seedForm.append(seedItem, seedTotal, button("Add seeds", () => act("add_seed", {
+      order_id: o.id, item_key: seedItem.value, total_received: num(seedTotal),
+    })));
+    card.append(seedForm);
+  }
 
-  card.append(el("strong", "Monster drops"));
+  card.append(el("strong", L.drops));
   if (o.drops.length) {
     const t = table([["Item"], ["Qty", true], ["Source"], ["Unit price", true], [""]]);
     o.drops.forEach((d) => t.tBodies[0].append(renderDrop(d)));
@@ -261,7 +300,7 @@ function renderOrder(o) {
   const dropQty = numInput("quantity");
   const dropSource = select([["given", "given by player"], ["bought", "bought"]]);
   const dropPrice = numInput("unit price (bought)");
-  dropForm.append(dropItem, dropQty, dropSource, dropPrice, button("Add drops", () => act("add_drop", {
+  dropForm.append(dropItem, dropQty, dropSource, dropPrice, button(L.addDrops, () => act("add_drop", {
     order_id: o.id, item_key: dropItem.value, quantity: num(dropQty), source: dropSource.value, price: num(dropPrice),
   })));
   card.append(dropForm);
@@ -293,12 +332,12 @@ function render() {
   }
 
   if (!data.potions.length) {
-    orders.append(el("p", "No potions known. Press refresh on the Herblore market page first.", "none"));
+    orders.append(el("p", L.none, "none"));
   } else {
     const potion = select(data.potions.map((p) => [p.key, p.label]));
     const qty = numInput("0 = unlimited", 1);
     qty.style.width = "9rem";
-    request.append(el("label", "Requested potion"), potion, qty,
+    request.append(el("label", L.requested), potion, qty,
       button("Add request", () => act("add_order", {player_id: player.id, potion_key: potion.value, quantity: num(qty)})));
   }
 
@@ -322,6 +361,51 @@ $("deletePlayer").addEventListener("click", () => {
   const player = data && data.players.find((p) => p.id === playerId);
   if (player && confirm("Delete " + player.name + " and all their requests?")) act("delete_player", {id: player.id});
 });
+
+// Recipes of a skill without a market page (alchemy) are refreshed here, by the admin. The
+// refresh is queued for the worker and takes a moment: start it, then poll its status.
+const refresh = $("refresh");
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const statusPath = "/api/refresh/status?skill=" + encodeURIComponent(skill);
+
+async function watchRefresh() {
+  refresh.disabled = true;
+  try {
+    for (;;) {
+      const job = await api(statusPath);
+      if (job.state === "queued" || job.state === "running") {
+        status("Refreshing... " + (job.progress || ""));
+        await sleep(2000);
+        continue;
+      }
+      if (job.state === "error") throw new Error(job.error);
+      await load();
+      status("Recipes refreshed");
+      return;
+    }
+  } catch (e) {
+    status("Refresh failed: " + e.message, true);
+  } finally {
+    refresh.disabled = false;
+  }
+}
+
+if (refresh && isHerblore) {
+  refresh.remove(); // Herblore is refreshed from its market page
+} else if (refresh) {
+  refresh.textContent = "Refresh recipes";
+  refresh.addEventListener("click", async () => {
+    status("Refreshing...");
+    try {
+      await api("/api/refresh?skill=" + encodeURIComponent(skill), {method: "POST"});
+    } catch (e) {
+      status("Refresh failed: " + e.message, true);
+      return;
+    }
+    watchRefresh();
+  });
+  api(statusPath).then((job) => { if (job.state === "queued" || job.state === "running") watchRefresh(); }).catch(() => {});
+}
 
 load().catch((e) => status(e.message, true));
 </script>

@@ -15,6 +15,11 @@ FIXED_PRICES = {"vial_of_water": 50}
 # Random pause (seconds) between API requests, to stay polite to the server.
 REQUEST_DELAY = (10, 20)
 
+# Skills that only feed a tracker: no market prices are looked up for them, so a refresh is
+# one request. The recipes of these skills are limited to the listed sections of the API.
+TRACKER_ONLY = {"alchemy"}
+RECIPE_SECTIONS = {"alchemy": {"Utility"}}
+
 # Seconds between checks of the job queue (also the worker heartbeat interval).
 JOB_POLL = 2
 
@@ -55,10 +60,14 @@ class MarketService(BaseService):
         return None
 
     @staticmethod
-    def _parse_recipes(data):
+    def _parse_recipes(data, skill=None):
         recipes = []
+        sections = RECIPE_SECTIONS.get(skill)
 
         for action in data.get("actions") or []:
+            if sections is not None and action.get("category") not in sections:
+                continue
+
             ingredients = []
 
             for ingredient in action.get("ingredients") or []:
@@ -99,13 +108,13 @@ class MarketService(BaseService):
                     "Skill",
                 )
 
-                recipes = self._parse_recipes(data)
+                recipes = self._parse_recipes(data, skill)
                 keys = {i["item_key"] for r in recipes for i in r["ingredients"]}
                 keys |= {r["reward_key"] for r in recipes if r["reward_key"]}
                 keys = sorted(keys)
 
                 market = {}
-                lookups = [key for key in keys if key not in FIXED_PRICES]
+                lookups = [] if skill in TRACKER_ONLY else [key for key in keys if key not in FIXED_PRICES]
 
                 for step, key in enumerate(lookups, start=1):
                     self.store.set_job_progress(skill, f"{step}/{len(lookups)}")

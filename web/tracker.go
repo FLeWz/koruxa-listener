@@ -63,6 +63,7 @@ type PotionIngredient struct {
 type Potion struct {
 	Key         string             `json:"key"`
 	Label       string             `json:"label"`
+	Amount      float64            `json:"amount"` // items one craft gives; the ingredients are per craft
 	Ingredients []PotionIngredient `json:"ingredients"`
 }
 
@@ -103,8 +104,9 @@ type Drop struct {
 }
 
 type Give struct {
-	ID       int64 `json:"id"`
-	Quantity int64 `json:"quantity"`
+	ID       int64  `json:"id"`
+	Quantity int64  `json:"quantity"`
+	Date     string `json:"date"`
 }
 
 type Order struct {
@@ -133,7 +135,9 @@ type TrackerView struct {
 	Players []PlayerOut `json:"players"`
 }
 
-// potions lists the potions of the last market refresh. The fixed-price vial is left out.
+// potions lists the recipes of the last refresh of a skill (potions, or the alchemy recipes).
+// An order names its recipe by key: reward keys are not unique in alchemy. The fixed-price
+// vial is left out of the ingredients.
 func (a *App) potions(skill string) ([]Potion, error) {
 	view, err := a.marketView(skill)
 	if err != nil {
@@ -143,7 +147,7 @@ func (a *App) potions(skill string) ([]Potion, error) {
 	potions := []Potion{}
 
 	for _, r := range view.Recipes {
-		p := Potion{Key: r.RewardKey, Label: r.Label, Ingredients: []PotionIngredient{}}
+		p := Potion{Key: r.Key, Label: r.Label, Amount: r.Amount, Ingredients: []PotionIngredient{}}
 
 		for _, i := range r.Ingredients {
 			if _, fixed := fixedPrices[i.ItemKey]; !fixed {
@@ -204,7 +208,7 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 
 	rows.Close()
 
-	rows, err = a.db.Query("SELECT id, player_id, potion_key, quantity FROM orders WHERE player_id IN (SELECT id FROM players WHERE user_id = ?) ORDER BY id", uid)
+	rows, err = a.db.Query("SELECT id, player_id, potion_key, quantity FROM orders WHERE skill = ? AND player_id IN (SELECT id FROM players WHERE user_id = ?) ORDER BY id", skill, uid)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +318,7 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 
 	gives := map[int64][]Give{}
 
-	rows, err = a.db.Query("SELECT id, order_id, quantity FROM potions_given ORDER BY id")
+	rows, err = a.db.Query("SELECT id, order_id, quantity, created_at FROM potions_given ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +327,7 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 		var orderID int64
 		var g Give
 
-		if err := rows.Scan(&g.ID, &orderID, &g.Quantity); err != nil {
+		if err := rows.Scan(&g.ID, &orderID, &g.Quantity, &g.Date); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -369,6 +373,10 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 			out.Given += g.Quantity
 		}
 
+		// An order counts items, the ingredients are per craft, and a craft can give several
+		// items (a crystal dust recipe gives 2 or 4).
+		amount := math.Max(potion.Amount, 1)
+
 		// Per ingredient: how many are needed and how many we have (herb yield + drops).
 		for _, ing := range potion.Ingredients {
 			oi := OrderIngredient{PotionIngredient: ing}
@@ -389,11 +397,11 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 
 			// Unlimited requests (quantity 0) have no fixed need.
 			if o.quantity > 0 {
-				oi.Needed = ptr(ing.Quantity * float64(o.quantity))
+				oi.Needed = ptr(ing.Quantity * math.Ceil(float64(o.quantity)/amount))
 			}
 
 			if ing.Quantity > 0 {
-				n := int64(math.Floor(float64(oi.Have) / ing.Quantity))
+				n := int64(math.Floor(float64(oi.Have)/ing.Quantity) * amount)
 				oi.Potions = &n
 			}
 
@@ -436,6 +444,7 @@ var trackerActions = map[string]actionFn{
 	"delete_player":   deleter("players", "Player"),
 	"add_order":       actAddOrder,
 	"add_given":       actAddGiven,
+	"delete_given":    deleter("potions_given", "Entry"),
 	"delete_order":    deleter("orders", "Request"),
 	"add_seed":        actAddSeed,
 	"set_seed_total":  actSetSeedTotal,
@@ -591,7 +600,7 @@ func actAddOrder(tx *sql.Tx, uid int64, body map[string]any, a *App, skill strin
 	}
 
 	if !known {
-		return nil, userErr("Unknown potion. Refresh market data first.")
+		return nil, userErr("Unknown recipe. Refresh the recipes first.")
 	}
 
 	return inserted(tx.Exec(
@@ -624,7 +633,7 @@ func actAddGiven(tx *sql.Tx, uid int64, body map[string]any, a *App, skill strin
 	}
 
 	if limit > 0 && total+quantity > limit {
-		return nil, userErr("Cannot give more potions than requested")
+		return nil, userErr("Cannot give more than was requested")
 	}
 
 	return inserted(tx.Exec("INSERT INTO potions_given (order_id, quantity, created_at) VALUES (?, ?, ?)", orderID, quantity, now()))

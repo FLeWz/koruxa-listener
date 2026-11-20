@@ -46,6 +46,9 @@ const navStyle = `<style>
 // The Arcana market is the same page as the Herblore market, for another skill.
 const arcanaMarketPath = "/?skill=arcana"
 
+// The alchemy tracker is the Herblore tracker page for another skill.
+const alchemyTrackerPath = "/tracker?skill=alchemy"
+
 const refreshButton = `<button id="refresh">Refresh market data</button>`
 
 type App struct {
@@ -161,7 +164,7 @@ func (q *req) page(name, active string, refresh bool) {
 
 // navHTML is the top navigation bar. The Users link is shown to the admin only.
 func navHTML(active string, user *User) string {
-	links := [][2]string{{"/", "Herblore market"}, {arcanaMarketPath, "Arcana market"}, {"/tracker", "Herblore tracker"}, {"/arcana", "Arcana sell tracker"}}
+	links := [][2]string{{"/", "Herblore market"}, {arcanaMarketPath, "Arcana market"}, {"/tracker", "Herblore tracker"}, {alchemyTrackerPath, "Alchemy tracker"}, {"/arcana", "Arcana sell tracker"}}
 
 	if user != nil && user.IsAdmin {
 		links = append(links, [2]string{"/admin", "Users"})
@@ -346,7 +349,13 @@ func (a *App) get(q *req) {
 
 	case "/tracker":
 		if q.requireUser(true) {
-			q.page("tracker", "/tracker", false)
+			active := "/tracker"
+			if q.r.URL.Query().Get("skill") == "alchemy" {
+				active = alchemyTrackerPath
+			}
+
+			// The admin gets a refresh button for the recipes of skills that have no market page.
+			q.page("tracker", active, q.user.IsAdmin)
 		}
 
 	case "/arcana":
