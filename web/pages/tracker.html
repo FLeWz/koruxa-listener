@@ -167,10 +167,28 @@ function renderPlanting(p) {
   const tr = el("tr");
   tr.append(el("td", fmt(p.planted), "num"));
 
-  const yieldInput = numInput("pending", p.yield);
-  yieldInput.addEventListener("change", () => act("set_planting", {id: p.id, yield: num(yieldInput)}));
+  // Own herbs counted in the inventory before and after the harvest.
+  const before = numInput("before", p.inv_before);
+  before.addEventListener("change", () => act("set_planting", {id: p.id, inv_before: num(before)}));
+  const beforeCell = el("td");
+  beforeCell.append(before);
+  tr.append(beforeCell);
+
+  const after = numInput("after harvest", p.inv_after);
+  after.addEventListener("change", () => act("set_planting", {id: p.id, inv_after: num(after)}));
+  const afterCell = el("td");
+  afterCell.append(after);
+  tr.append(afterCell);
+
+  // With both counts the yield is their difference. Otherwise it is typed in.
   const cell = el("td");
-  cell.append(yieldInput);
+  if (p.inv_before !== null && p.inv_after !== null) {
+    cell.append(el("span", fmt(p.yield), "ok"));
+  } else {
+    const yieldInput = numInput("pending", p.yield);
+    yieldInput.addEventListener("change", () => act("set_planting", {id: p.id, yield: num(yieldInput)}));
+    cell.append(yieldInput);
+  }
   tr.append(cell);
 
   const del = el("td");
@@ -193,16 +211,18 @@ function renderSeed(order, s) {
   box.append(head);
 
   if (s.plantings.length) {
-    const t = table([["Planted", true], ["Yield"], [""]]);
+    const t = table([["Planted", true], ["Own herbs before"], ["Own herbs after"], ["Yield"], [""]]);
     s.plantings.forEach((p) => t.tBodies[0].append(renderPlanting(p)));
     box.append(t);
   }
 
   const form = el("div", undefined, "row");
   const planted = numInput("planted");
+  const before = numInput("own herbs now");
+  before.title = "Herbs of this kind already in your inventory, counted before the harvest";
   const harvested = numInput("yield (optional)");
-  form.append(planted, harvested, button("Add planting", () => act("add_planting", {
-    seed_id: s.id, planted: num(planted), yield: num(harvested),
+  form.append(planted, before, harvested, button("Add planting", () => act("add_planting", {
+    seed_id: s.id, planted: num(planted), inv_before: num(before), yield: num(harvested),
   })));
   box.append(form);
   return box;

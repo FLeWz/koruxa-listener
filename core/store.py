@@ -110,6 +110,8 @@ CREATE TABLE IF NOT EXISTS plantings (
     seed_id    INTEGER NOT NULL REFERENCES seeds(id) ON DELETE CASCADE,
     planted    INTEGER NOT NULL,
     harvested  INTEGER,                 -- NULL until the yield is known
+    inv_before INTEGER,                 -- own herbs in the inventory before the harvest
+    inv_after  INTEGER,                 -- ... and after it; both set: harvested = after - before
     created_at TEXT NOT NULL
 );
 
@@ -162,6 +164,14 @@ class Store:
                     "SELECT id, given, created_at FROM orders WHERE given > 0"
                 )
                 db.execute("ALTER TABLE orders DROP COLUMN given")
+
+        # Databases from before the inventory counts have no such columns.
+        with self.connect() as db:
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(plantings)")}
+
+            for column in ("inv_before", "inv_after"):
+                if column not in columns:
+                    db.execute(f"ALTER TABLE plantings ADD COLUMN {column} INTEGER")
 
         self._migrate_owners()
 

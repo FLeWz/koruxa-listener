@@ -77,9 +77,11 @@ type OrderIngredient struct {
 }
 
 type Planting struct {
-	ID      int64  `json:"id"`
-	Planted int64  `json:"planted"`
-	Yield   *int64 `json:"yield"`
+	ID        int64  `json:"id"`
+	Planted   int64  `json:"planted"`
+	Yield     *int64 `json:"yield"`
+	InvBefore *int64 `json:"inv_before"` // own herbs in the inventory before the harvest
+	InvAfter  *int64 `json:"inv_after"`  // ... and after it; with both set the yield is the difference
 }
 
 type Seed struct {
@@ -227,7 +229,7 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 
 	plantings := map[int64][]Planting{}
 
-	rows, err = a.db.Query("SELECT id, seed_id, planted, harvested FROM plantings ORDER BY id")
+	rows, err = a.db.Query("SELECT id, seed_id, planted, harvested, inv_before, inv_after FROM plantings ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -235,14 +237,16 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 	for rows.Next() {
 		var seedID int64
 		var p Planting
-		var harvested sql.NullInt64
+		var harvested, before, after sql.NullInt64
 
-		if err := rows.Scan(&p.ID, &seedID, &p.Planted, &harvested); err != nil {
+		if err := rows.Scan(&p.ID, &seedID, &p.Planted, &harvested, &before, &after); err != nil {
 			rows.Close()
 			return nil, err
 		}
 
 		p.Yield = nullInt(harvested)
+		p.InvBefore = nullInt(before)
+		p.InvAfter = nullInt(after)
 		plantings[seedID] = append(plantings[seedID], p)
 	}
 
@@ -682,6 +686,34 @@ func actSetSeedTotal(tx *sql.Tx, uid int64, body map[string]any, a *App, skill s
 	return nil, err
 }
 
+// optionalCount reads an optional whole number (0 or more). null or a missing value is "not set".
+func optionalCount(v any, label string) (sql.NullInt64, error) {
+	if v == nil {
+		return sql.NullInt64{}, nil
+	}
+
+	n, err := wholeNumber(v, label, 0)
+	if err != nil {
+		return sql.NullInt64{}, err
+	}
+
+	return sql.NullInt64{Int64: n, Valid: true}, nil
+}
+
+// inventoryYield is the yield that follows from the own herbs counted in the inventory before
+// and after a harvest. ok is false until both counts are set.
+func inventoryYield(before, after sql.NullInt64) (yield sql.NullInt64, ok bool, err error) {
+	if !before.Valid || !after.Valid {
+		return sql.NullInt64{}, false, nil
+	}
+
+	if after.Int64 < before.Int64 {
+		return sql.NullInt64{}, false, userErr("Quantity after harvest is lower than the quantity before")
+	}
+
+	return sql.NullInt64{Int64: after.Int64 - before.Int64, Valid: true}, true, nil
+}
+
 func actAddPlanting(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
 	seedID, err := wholeNumber(body["seed_id"], "Seeds", 1)
 	if err != nil {
@@ -693,15 +725,30 @@ func actAddPlanting(tx *sql.Tx, uid int64, body map[string]any, a *App, skill st
 		return nil, err
 	}
 
-	var harvested sql.NullInt64
+	harvested, err := optionalCount(body["yield"], "Yield")
+	if err != nil {
+		return nil, err
+	}
 
-	if v := body["yield"]; v != nil {
-		n, err := wholeNumber(v, "Yield", 0)
-		if err != nil {
-			return nil, err
+	before, err := optionalCount(body["inv_before"], "Quantity before harvest")
+	if err != nil {
+		return nil, err
+	}
+
+	after, err := optionalCount(body["inv_after"], "Quantity after harvest")
+	if err != nil {
+		return nil, err
+	}
+
+	// With both inventory counts the yield is their difference, so it is not typed as well.
+	if diff, ok, err := inventoryYield(before, after); err != nil {
+		return nil, err
+	} else if ok {
+		if harvested.Valid {
+			return nil, userErr("The yield is calculated from the quantities before and after the harvest")
 		}
 
-		harvested = sql.NullInt64{Int64: n, Valid: true}
+		harvested = diff
 	}
 
 	// Harvests can give more seeds, so planting is not limited by the seeds received.
@@ -709,7 +756,10 @@ func actAddPlanting(tx *sql.Tx, uid int64, body map[string]any, a *App, skill st
 		return nil, err
 	}
 
-	return inserted(tx.Exec("INSERT INTO plantings (seed_id, planted, harvested, created_at) VALUES (?, ?, ?, ?)", seedID, count, harvested, now()))
+	return inserted(tx.Exec(
+		"INSERT INTO plantings (seed_id, planted, harvested, inv_before, inv_after, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+		seedID, count, harvested, before, after, now(),
+	))
 }
 
 func actSetPlanting(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
@@ -719,13 +769,17 @@ func actSetPlanting(tx *sql.Tx, uid int64, body map[string]any, a *App, skill st
 	}
 
 	var count int64
-	var harvested sql.NullInt64
+	var harvested, before, after sql.NullInt64
 
-	if err := tx.QueryRow("SELECT planted, harvested FROM plantings WHERE "+ownedBy["plantings"], id, uid).Scan(&count, &harvested); err == sql.ErrNoRows {
+	if err := tx.QueryRow(
+		"SELECT planted, harvested, inv_before, inv_after FROM plantings WHERE "+ownedBy["plantings"], id, uid,
+	).Scan(&count, &harvested, &before, &after); err == sql.ErrNoRows {
 		return nil, userErr("Planting not found")
 	} else if err != nil {
 		return nil, err
 	}
+
+	_, wasDerived, _ := inventoryYield(before, after)
 
 	if v, has := body["planted"]; has {
 		if count, err = wholeNumber(v, "Planted", 1); err != nil {
@@ -733,20 +787,52 @@ func actSetPlanting(tx *sql.Tx, uid int64, body map[string]any, a *App, skill st
 		}
 	}
 
-	if v, has := body["yield"]; has {
-		if v == nil {
-			harvested = sql.NullInt64{}
-		} else {
-			n, err := wholeNumber(v, "Yield", 0)
-			if err != nil {
-				return nil, err
-			}
+	touched := false
 
-			harvested = sql.NullInt64{Int64: n, Valid: true}
+	if v, has := body["inv_before"]; has {
+		touched = true
+
+		if before, err = optionalCount(v, "Quantity before harvest"); err != nil {
+			return nil, err
 		}
 	}
 
-	_, err = tx.Exec("UPDATE plantings SET planted = ?, harvested = ? WHERE id = ?", count, harvested, id)
+	if v, has := body["inv_after"]; has {
+		touched = true
+
+		if after, err = optionalCount(v, "Quantity after harvest"); err != nil {
+			return nil, err
+		}
+	}
+
+	diff, derived, err := inventoryYield(before, after)
+	if err != nil {
+		return nil, err
+	}
+
+	if v, has := body["yield"]; has {
+		if derived {
+			return nil, userErr("The yield is calculated from the quantities before and after the harvest")
+		}
+
+		if harvested, err = optionalCount(v, "Yield"); err != nil {
+			return nil, err
+		}
+	}
+
+	if touched {
+		if derived {
+			harvested = diff
+		} else if wasDerived {
+			// A count was cleared: the calculated yield is gone and the harvest is pending again.
+			harvested = sql.NullInt64{}
+		}
+	}
+
+	_, err = tx.Exec(
+		"UPDATE plantings SET planted = ?, harvested = ?, inv_before = ?, inv_after = ? WHERE id = ?",
+		count, harvested, before, after, id,
+	)
 
 	return nil, err
 }
