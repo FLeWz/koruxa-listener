@@ -80,6 +80,8 @@ class MarketService(BaseService):
                         "yield_chance": calc.get("yield_chance") or 0,
                         "amount": calc.get("base_amount") or action.get("amount") or 1,
                         "reward_key": action.get("reward_item_key") or action.get("key"),
+                        # "runes", "tools", "potion", ...: the market page lists runes, then tools
+                        "item_category": (action.get("reward_stats") or {}).get("category"),
                         "ingredients": ingredients,
                     }
                 )

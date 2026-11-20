@@ -51,6 +51,7 @@ type recipeIn struct {
 	YieldChance float64        `json:"yield_chance"`
 	Amount      float64        `json:"amount"`
 	RewardKey   string         `json:"reward_key"`
+	Category    string         `json:"item_category"`
 	Ingredients []ingredientIn `json:"ingredients"`
 }
 
@@ -76,6 +77,7 @@ type RecipeOut struct {
 	Key               string          `json:"key"`
 	Label             string          `json:"label"`
 	Level             *float64        `json:"level"`
+	Category          string          `json:"category"`
 	RewardKey         string          `json:"reward_key"`
 	Market            *PriceInfo      `json:"market"`
 	UsesPotions       bool            `json:"uses_potions"`
@@ -105,6 +107,18 @@ type MarketView struct {
 }
 
 func ptr(v float64) *float64 { return &v }
+
+// categoryRank orders the items of a skill: runes, then tools, then everything else.
+func categoryRank(category string) int {
+	switch category {
+	case "runes":
+		return 0
+	case "tools":
+		return 1
+	}
+
+	return 2
+}
 
 func (a *App) marketView(skill string) (*MarketView, error) {
 	view := &MarketView{Skill: skill, Recipes: []RecipeOut{}, Items: []ItemOut{}, Potions: []ItemOut{}}
@@ -207,6 +221,15 @@ func (a *App) marketView(skill string) (*MarketView, error) {
 		byReward[rewardOf(r)] = r
 	}
 
+	// One craft can give more than one item (a rune recipe gives 2).
+	amountOf := func(r recipeIn) float64 {
+		if r.Amount > 0 {
+			return r.Amount
+		}
+
+		return 1
+	}
+
 	// Your price, else market/fixed, else craft price when the item is a potion.
 	var unitPrice func(key string, stack []string) *float64
 
@@ -237,13 +260,16 @@ func (a *App) marketView(skill string) (*MarketView, error) {
 			total += *part * ing.Quantity
 		}
 
+		// Per item: the ingredients of one craft are shared by everything it gives.
+		total /= amountOf(recipe)
+
 		return &total
 	}
 
 	itemKeys := map[string]bool{}
 
 	for _, recipe := range recipes {
-		out := RecipeOut{Key: recipe.Key, Label: recipe.Label, Level: recipe.Level, Ingredients: []IngredientOut{}}
+		out := RecipeOut{Key: recipe.Key, Label: recipe.Label, Level: recipe.Level, Category: recipe.Category, Ingredients: []IngredientOut{}}
 
 		if out.Label == "" {
 			out.Label = recipe.Key
@@ -291,19 +317,17 @@ func (a *App) marketView(skill string) (*MarketView, error) {
 			}
 		}
 
+		// costPtr is the ingredient cost of one craft (used for gold per hour). Cost and
+		// CostDouble are per item, so they compare with the item's market price.
 		var costPtr *float64
 		if missing == 0 {
 			costPtr = ptr(cost)
+			out.Cost = ptr(cost / amountOf(recipe))
 		}
-
-		out.Cost = costPtr
 
 		// Per-hour numbers use your current bonuses as reported by the skill API.
 		sell := priceInfo(reward).Price
-		amount := recipe.Amount
-		if amount == 0 {
-			amount = 1
-		}
+		amount := amountOf(recipe)
 
 		if recipe.CycleMs != nil && *recipe.CycleMs != 0 {
 			crafts := 3_600_000 / *recipe.CycleMs
@@ -315,7 +339,7 @@ func (a *App) marketView(skill string) (*MarketView, error) {
 			out.QtyPerHourDouble = ptr(qtyDouble)
 
 			if costPtr != nil {
-				out.CostDouble = ptr(*costPtr / (1 + recipe.YieldChance/100))
+				out.CostDouble = ptr(*out.Cost / (1 + recipe.YieldChance/100))
 
 				if sell != nil {
 					out.GoldPerHour = ptr(qty**sell - crafts**costPtr)
@@ -327,8 +351,14 @@ func (a *App) marketView(skill string) (*MarketView, error) {
 		view.Recipes = append(view.Recipes, out)
 	}
 
+	// Runes first, then tools, then the rest; each group by level. The tables that list the
+	// items follow this order.
 	sort.SliceStable(view.Recipes, func(i, j int) bool {
 		a, b := view.Recipes[i], view.Recipes[j]
+
+		if ra, rb := categoryRank(a.Category), categoryRank(b.Category); ra != rb {
+			return ra < rb
+		}
 
 		if (a.Level == nil) != (b.Level == nil) {
 			return a.Level != nil

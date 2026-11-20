@@ -43,6 +43,9 @@ const navStyle = `<style>
   nav button.logout:hover { color: var(--text); }
 </style>`
 
+// The Arcana market is the same page as the Herblore market, for another skill.
+const arcanaMarketPath = "/?skill=arcana"
+
 const refreshButton = `<button id="refresh">Refresh market data</button>`
 
 type App struct {
@@ -158,7 +161,7 @@ func (q *req) page(name, active string, refresh bool) {
 
 // navHTML is the top navigation bar. The Users link is shown to the admin only.
 func navHTML(active string, user *User) string {
-	links := [][2]string{{"/", "Herblore market"}, {"/tracker", "Herblore tracker"}, {"/arcana", "Arcana sell tracker"}}
+	links := [][2]string{{"/", "Herblore market"}, {arcanaMarketPath, "Arcana market"}, {"/tracker", "Herblore tracker"}, {"/arcana", "Arcana sell tracker"}}
 
 	if user != nil && user.IsAdmin {
 		links = append(links, [2]string{"/admin", "Users"})
@@ -333,7 +336,12 @@ func (a *App) get(q *req) {
 
 	case "/":
 		if q.requireUser(true) {
-			q.page("market", "/", q.user.IsAdmin)
+			active := "/"
+			if q.r.URL.Query().Get("skill") == "arcana" {
+				active = arcanaMarketPath
+			}
+
+			q.page("market", active, q.user.IsAdmin)
 		}
 
 	case "/tracker":

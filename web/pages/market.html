@@ -40,7 +40,7 @@
   <span id="status" class="muted"></span>
 </p>
 
-<h2>Potions</h2>
+<h2 id="itemsHeading">Potions</h2>
 <table>
   <thead>
     <tr>
@@ -51,10 +51,10 @@
       <th class="grp"></th>
     </tr>
     <tr>
-      <th class="num">Lvl</th><th>Potion</th><th>Ingredients</th>
-      <th class="num grp">Craft price</th><th class="num">Qty/h</th><th class="num">Gold/h</th>
-      <th class="num grp">Craft price</th><th class="num">Qty/h</th><th class="num">Gold/h</th>
-      <th class="num grp" title="Market price. Potions made from other potions also show their craft price in brackets.">Market (craft)</th>
+      <th class="num">Lvl</th><th id="itemHead">Potion</th><th>Ingredients</th>
+      <th class="num grp" title="Ingredient cost per item crafted">Craft price</th><th class="num">Qty/h</th><th class="num">Gold/h</th>
+      <th class="num grp" title="Ingredient cost per item crafted, with the double drop chance">Craft price</th><th class="num">Qty/h</th><th class="num">Gold/h</th>
+      <th class="num grp" title="Market price. Items made from other crafted items also show their craft price in brackets.">Market (craft)</th>
       <th class="num grp" title="Best Gold/h (regular or double drop) x 24">Gold/day</th>
     </tr>
   </thead>
@@ -70,20 +70,26 @@
     </table>
   </div>
   <div>
-    <h2>Potion prices</h2>
+    <h2 id="pricesHeading">Potion prices</h2>
     <table class="narrow">
-      <thead><tr><th>Potion</th><th class="num">Market</th><th>Your price</th></tr></thead>
+      <thead><tr><th id="priceItemHead">Potion</th><th class="num">Market</th><th>Your price</th></tr></thead>
       <tbody id="potions"></tbody>
     </table>
   </div>
 </div>
-<p class="muted">Type a price to override it. Empty fields use the market minimum (vial of water is fixed at 50).</p>
+<p class="muted">Type a price to override it. Empty fields use the market minimum<span id="fixedNote"> (vial of water is fixed at 50)</span>.</p>
 
 </main>
 
 <script>
 const skill = new URLSearchParams(location.search).get("skill") || "herblore";
 const $ = (id) => document.getElementById(id);
+{
+  // Right away, before the data arrives.
+  const name = skill.charAt(0).toUpperCase() + skill.slice(1);
+  $("title").textContent = name + " market";
+  document.title = name + " market";
+}
 const fmt = (n) => (n === null || n === undefined) ? "-" : Number(n).toLocaleString();
 
 const fmt1 = (n) => (n === null || n === undefined) ? "-" : Number(n).toLocaleString(undefined, {maximumFractionDigits: 1});
@@ -141,7 +147,16 @@ function priceInput(key, info) {
 }
 
 function render(data) {
-  $("title").textContent = data.skill.charAt(0).toUpperCase() + data.skill.slice(1) + " market";
+  const skillName = data.skill.charAt(0).toUpperCase() + data.skill.slice(1);
+  // Herblore makes potions; the other skills make items.
+  const noun = data.skill === "herblore" ? "Potion" : "Item";
+  $("title").textContent = skillName + " market";
+  document.title = skillName + " market";
+  $("itemsHeading").textContent = noun + "s";
+  $("itemHead").textContent = noun;
+  $("pricesHeading").textContent = noun + " prices";
+  $("priceItemHead").textContent = noun;
+  $("fixedNote").hidden = data.skill !== "herblore";
   if (data.updated_at) status("Market data from " + new Date(data.updated_at).toLocaleString());
   else status("No data yet. Press refresh.");
 
