@@ -57,6 +57,9 @@
 const skill = new URLSearchParams(location.search).get("skill") || "herblore";
 const $ = (id) => document.getElementById(id);
 
+// "N (M)": M counts the double drop chance on average. Left out when it is the same as N.
+const withDouble = (n, d) => (d === null || d === undefined || d === n) ? fmt(n) : fmt(n) + " (" + fmt(d) + ")";
+
 // Herblore hands over potions made from seeds and drops. Alchemy sends items every day and
 // has no seeds. The page is the same; only the words and the seeds section differ.
 const isHerblore = skill === "herblore";
@@ -251,7 +254,7 @@ function renderOrder(o) {
   // Each entry is a newly handed-over batch; the total is their sum.
   const given = el("div", undefined, "row");
   given.append(el("strong", L.given + ": " + fmt(o.given)));
-  if (o.quantity === 0) given.append(el("span", "can make " + fmt(o.possible), "muted"));
+  if (o.quantity === 0) given.append(el("span", "can make " + withDouble(o.possible, o.possible_double), "muted"));
   given.append(el("span", "left to give " + fmt(o.remaining), (o.remaining !== null && o.remaining < 0 ? "none" : "muted")));
   card.append(given);
 
@@ -291,7 +294,7 @@ function renderOrder(o) {
       tr.append(el("td", fmt(i.from_drops), "num"));
       const short = i.needed !== null && i.have < i.needed;
       tr.append(el("td", fmt(i.have), "num " + (i.needed === null ? "" : (short ? "none" : "ok"))));
-      tr.append(el("td", fmt(i.potions), "num"));
+      tr.append(el("td", withDouble(i.potions, i.potions_double), "num"));
       t.tBodies[0].append(tr);
     }
     card.append(t);

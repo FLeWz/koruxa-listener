@@ -78,7 +78,8 @@ type RecipeOut struct {
 	Label             string          `json:"label"`
 	Level             *float64        `json:"level"`
 	Category          string          `json:"category"`
-	Amount            float64         `json:"amount"` // items one craft gives
+	Amount            float64         `json:"amount"`       // items one craft gives
+	YieldChance       float64         `json:"yield_chance"` // double drop chance in percent
 	RewardKey         string          `json:"reward_key"`
 	Market            *PriceInfo      `json:"market"`
 	UsesPotions       bool            `json:"uses_potions"`
@@ -306,6 +307,7 @@ func (a *App) marketView(skill string) (*MarketView, error) {
 		reward := rewardOf(recipe)
 		out.RewardKey = reward
 		out.Amount = amountOf(recipe)
+		out.YieldChance = recipe.YieldChance
 		out.Missing = missing
 
 		if reward != "" {

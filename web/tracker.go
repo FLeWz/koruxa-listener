@@ -63,7 +63,8 @@ type PotionIngredient struct {
 type Potion struct {
 	Key         string             `json:"key"`
 	Label       string             `json:"label"`
-	Amount      float64            `json:"amount"` // items one craft gives; the ingredients are per craft
+	Amount      float64            `json:"amount"`       // items one craft gives; the ingredients are per craft
+	YieldChance float64            `json:"yield_chance"` // double drop chance in percent
 	Ingredients []PotionIngredient `json:"ingredients"`
 }
 
@@ -74,6 +75,8 @@ type OrderIngredient struct {
 	FromDrops int64    `json:"from_drops"`
 	Have      int64    `json:"have"`
 	Potions   *int64   `json:"potions"`
+	// Potions with the double drop chance counted: on average each craft gives that much more.
+	PotionsDouble *int64 `json:"potions_double"`
 }
 
 type Planting struct {
@@ -112,17 +115,19 @@ type Give struct {
 }
 
 type Order struct {
-	ID          int64             `json:"id"`
-	PotionKey   string            `json:"potion_key"`
-	Potion      string            `json:"potion"`
-	Quantity    int64             `json:"quantity"`
-	Given       int64             `json:"given"`
-	Gives       []Give            `json:"gives"`
-	Possible    *int64            `json:"possible"`
-	Remaining   *int64            `json:"remaining"`
-	Ingredients []OrderIngredient `json:"ingredients"`
-	Seeds       []Seed            `json:"seeds"`
-	Drops       []Drop            `json:"drops"`
+	ID        int64  `json:"id"`
+	PotionKey string `json:"potion_key"`
+	Potion    string `json:"potion"`
+	Quantity  int64  `json:"quantity"`
+	Given     int64  `json:"given"`
+	Gives     []Give `json:"gives"`
+	Possible  *int64 `json:"possible"`
+	// Possible with the double drop chance counted.
+	PossibleDouble *int64            `json:"possible_double"`
+	Remaining      *int64            `json:"remaining"`
+	Ingredients    []OrderIngredient `json:"ingredients"`
+	Seeds          []Seed            `json:"seeds"`
+	Drops          []Drop            `json:"drops"`
 }
 
 type PlayerOut struct {
@@ -149,7 +154,7 @@ func (a *App) potions(skill string) ([]Potion, error) {
 	potions := []Potion{}
 
 	for _, r := range view.Recipes {
-		p := Potion{Key: r.Key, Label: r.Label, Amount: r.Amount, Ingredients: []PotionIngredient{}}
+		p := Potion{Key: r.Key, Label: r.Label, Amount: r.Amount, YieldChance: r.YieldChance, Ingredients: []PotionIngredient{}}
 
 		for _, i := range r.Ingredients {
 			if _, fixed := fixedPrices[i.ItemKey]; !fixed {
@@ -407,6 +412,9 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 			if ing.Quantity > 0 {
 				n := int64(math.Floor(float64(oi.Have)/ing.Quantity) * amount)
 				oi.Potions = &n
+
+				d := int64(math.Floor(float64(n) * (1 + potion.YieldChance/100)))
+				oi.PotionsDouble = &d
 			}
 
 			out.Ingredients = append(out.Ingredients, oi)
@@ -414,6 +422,7 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 			// Output follows from the scarcest ingredient.
 			if oi.Potions != nil && (out.Possible == nil || *oi.Potions < *out.Possible) {
 				out.Possible = oi.Potions
+				out.PossibleDouble = oi.PotionsDouble
 			}
 		}
 
