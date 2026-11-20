@@ -61,6 +61,13 @@ CREATE TABLE IF NOT EXISTS refresh_jobs (
     finished_at  INTEGER
 );
 
+-- Arcana sell tracker: sale prices in whole gold (500.6M is 500600000)
+CREATE TABLE IF NOT EXISTS arcana_prices (
+    id         INTEGER PRIMARY KEY,
+    price      INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 -- Potion crafting tracker
 CREATE TABLE IF NOT EXISTS players (
     id         INTEGER PRIMARY KEY,

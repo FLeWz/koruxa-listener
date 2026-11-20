@@ -158,7 +158,7 @@ func (q *req) page(name, active string, refresh bool) {
 
 // navHTML is the top navigation bar. The Users link is shown to the admin only.
 func navHTML(active string, user *User) string {
-	links := [][2]string{{"/", "Herblore market"}, {"/tracker", "Herblore tracker"}}
+	links := [][2]string{{"/", "Herblore market"}, {"/tracker", "Herblore tracker"}, {"/arcana", "Arcana sell tracker"}}
 
 	if user != nil && user.IsAdmin {
 		links = append(links, [2]string{"/admin", "Users"})
@@ -339,6 +339,22 @@ func (a *App) get(q *req) {
 	case "/tracker":
 		if q.requireUser(true) {
 			q.page("tracker", "/tracker", false)
+		}
+
+	case "/arcana":
+		if q.requireUser(true) {
+			q.page("arcana", "/arcana", false)
+		}
+
+	case "/api/arcana":
+		if q.requireUser(false) {
+			view, err := a.arcanaView()
+			if err != nil {
+				q.handleErr(err)
+				return
+			}
+
+			q.json(200, view)
 		}
 
 	case "/admin":
@@ -559,6 +575,24 @@ func (a *App) post(q *req) {
 			q.handleErr(err)
 		} else {
 			q.json(200, map[string]bool{"ok": true})
+		}
+
+	case strings.HasPrefix(path, "/api/arcana/"):
+		if !q.requireUser(false) {
+			return
+		}
+
+		body, err := q.body()
+		if err != nil {
+			q.handleErr(err)
+			return
+		}
+
+		result, err := a.arcanaAction(strings.TrimPrefix(path, "/api/arcana/"), body)
+		if err != nil {
+			q.handleErr(err)
+		} else {
+			q.json(200, result)
 		}
 
 	case strings.HasPrefix(path, "/api/tracker/"):

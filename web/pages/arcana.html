@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!--THEME-->
+<title>Arcana sell tracker</title>
+<style>
+  body { font: 14px system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; }
+  main { max-width: 700px; margin: 1.5rem auto 2rem; padding: 0 1rem; }
+  h1, h2 { font-weight: 600; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: .4rem .9rem; cursor: pointer; }
+  button.link { background: none; color: var(--danger); padding: 0 .4rem; }
+  input { background: var(--input-bg); color: var(--text); border: 1px solid var(--border-strong); border-radius: 4px; padding: .3rem .5rem; }
+  input.price { width: 14rem; text-align: right; }
+  table { border-collapse: collapse; margin: .5rem 0 1rem; }
+  th, td { text-align: left; padding: .3rem .8rem .3rem 0; border-bottom: 1px solid var(--border); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin: .6rem 0; }
+  .card { border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin-bottom: 1.2rem; background: var(--surface); }
+  .totals { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1.5rem; font-size: 1.1rem; }
+  .totals .v { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  button.copy { font-size: .75rem; padding: .15rem .5rem; margin-right: .5rem; vertical-align: middle; font-weight: normal; }
+  .list { max-height: 28rem; overflow-y: auto; }
+  .muted { color: var(--muted); }
+  .err { color: var(--danger); }
+</style>
+</head>
+<body>
+<!--NAV-->
+<main>
+<h1>Arcana sell tracker</h1>
+<p><span id="status" class="muted"></span></p>
+
+<div class="card">
+  <div class="totals">
+    <span>Prices</span><span class="v" id="count">0</span>
+    <span>Sum</span><span class="v" id="sum">0M</span>
+    <span>20%</span><span class="v"><button id="copy" type="button" class="copy" title="Copy the 20% value in millions, e.g. 120M">Copy</button> <span id="share">0M</span></span>
+  </div>
+</div>
+
+<div class="row">
+  <input id="price" class="price" type="text" inputmode="decimal" autocomplete="off" placeholder="Price in millions, e.g. 500.6" autofocus>
+  <button id="add">Add</button>
+  <button id="clear" class="link">Clear all</button>
+</div>
+<p class="muted">Prices are in millions: 500.6 is 500.6M. Add several at once separated by spaces or new lines.</p>
+
+<div class="list">
+  <table>
+    <thead><tr><th class="num">#</th><th class="num">Price</th><th></th></tr></thead>
+    <tbody id="prices"></tbody>
+  </table>
+</div>
+
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// Gold is whole numbers; shown in millions with up to 6 decimals and no trailing zeros.
+const millions = (gold) => (gold / 1e6).toLocaleString(undefined, {maximumFractionDigits: 6}) + "M";
+
+// The calculated values are rounded: the sum to 1 decimal place, the 20% to a whole number.
+const millions1 = (gold) => (gold / 1e6).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1}) + "M";
+const millions0 = (gold) => (gold / 1e6).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0}) + "M";
+
+function el(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text !== undefined) e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
+}
+
+function status(text, err) {
+  const s = $("status");
+  s.textContent = text ? " " + text : "";
+  s.className = err ? "err" : "muted";
+}
+
+async function api(path, options) {
+  const r = await fetch(path, options);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || ("HTTP " + r.status));
+  return body;
+}
+
+// Whole millions of the 20% with an M and no thousands commas, e.g. "1234M": this is what the Copy button copies.
+let shareToCopy = "0M";
+
+// navigator.clipboard only exists on HTTPS or localhost, and this page is often plain HTTP on the LAN,
+// so fall back to a hidden textarea and execCommand.
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (e) { /* fall through */ }
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.append(area);
+  area.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) { /* ok stays false */ }
+  area.remove();
+  return ok;
+}
+
+let copyTimer = null;
+
+$("copy").addEventListener("click", async () => {
+  const button = $("copy");
+  const ok = await copyText(shareToCopy);
+  button.textContent = ok ? "Copied" : "Failed";
+  clearTimeout(copyTimer);
+  copyTimer = setTimeout(() => { button.textContent = "Copy"; }, 1500);
+});
+
+function render(data) {
+  $("count").textContent = data.prices.length.toLocaleString();
+  $("sum").textContent = millions1(data.sum);
+  $("share").textContent = millions0(data.share);
+  shareToCopy = Math.round(data.share / 1e6) + "M";
+
+  const body = $("prices");
+  body.replaceChildren();
+
+  // Newest first; the number is the position in the order they were added.
+  data.prices.forEach((p, i) => {
+    const tr = el("tr");
+    tr.append(el("td", data.prices.length - i, "num muted"));
+    tr.append(el("td", millions(p.gold), "num"));
+    const del = el("button", "Delete", "link");
+    del.type = "button";
+    del.addEventListener("click", () => act("delete", {id: p.id}));
+    const cell = el("td");
+    cell.append(del);
+    tr.append(cell);
+    body.append(tr);
+  });
+}
+
+async function act(action, body) {
+  try {
+    render(await api("/api/arcana/" + action, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    }));
+    status("");
+    return true;
+  } catch (e) {
+    status(e.message, true);
+    return false;
+  }
+}
+
+// "500,6" works as 500.6. Anything that is not a plain number is refused before it is sent.
+function parsePrices(text) {
+  const parts = text.split(/[\s;]+/).filter(Boolean);
+  const numbers = parts.map((p) => /^\d+([.,]\d+)?$/.test(p) ? Number(p.replace(",", ".")) : NaN);
+  const bad = parts.find((_, i) => Number.isNaN(numbers[i]));
+  if (bad !== undefined) throw new Error("Not a price: " + bad);
+  return numbers;
+}
+
+async function add() {
+  const input = $("price");
+  let prices;
+  try {
+    prices = parsePrices(input.value);
+  } catch (e) {
+    status(e.message, true);
+    return;
+  }
+  if (!prices.length) return;
+  // The server limits a request to a few KB: send long pastes in chunks.
+  let ok = true;
+  for (let i = 0; ok && i < prices.length; i += 300) ok = await act("add", {prices: prices.slice(i, i + 300)});
+  if (ok) input.value = "";
+  input.focus();
+}
+
+$("add").addEventListener("click", add);
+$("price").addEventListener("keydown", (e) => { if (e.key === "Enter") add(); });
+$("clear").addEventListener("click", () => {
+  if (confirm("Delete all prices?")) act("clear", {});
+});
+
+api("/api/arcana").then(render).catch((e) => status(e.message, true));
+</script>
+</body>
+</html>
