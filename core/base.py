@@ -35,6 +35,8 @@ class BaseService:
 
     def mention(self, role):
         key = str(role).replace(" ", "").replace("_", "").lower()
+        # The game API spells it "Jewelery"; the role is ROLE_ID_JEWELLERY.
+        key = {"jewelery": "jewellery"}.get(key, key)
         role_id = self.config.role_ids.get(key)
 
         if role_id:
