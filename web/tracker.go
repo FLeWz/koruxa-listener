@@ -235,7 +235,7 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 
 	plantings := map[int64][]Planting{}
 
-	rows, err = a.db.Query("SELECT id, seed_id, planted, harvested, inv_before, inv_after FROM plantings ORDER BY id")
+	rows, err = a.db.Query("SELECT id, base_id, made, harvested, inv_before, inv_after FROM making ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +260,7 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 
 	seeds := map[int64][]Seed{}
 
-	rows, err = a.db.Query("SELECT id, player_id, item_key, total_received FROM seeds WHERE skill = ? ORDER BY id", skill)
+	rows, err = a.db.Query("SELECT id, player_id, item_key, total_received FROM base WHERE skill = ? ORDER BY id", skill)
 	if err != nil {
 		return nil, err
 	}
@@ -490,10 +490,10 @@ var trackerActions = map[string]actionFn{
 	"delete_order":    deleter("orders", "Request"),
 	"add_seed":        actAddSeed,
 	"set_seed_total":  actSetSeedTotal,
-	"delete_seed":     deleter("seeds", "Seeds"),
+	"delete_seed":     deleter("base", "Base"),
 	"add_planting":    actAddPlanting,
 	"set_planting":    actSetPlanting,
-	"delete_planting": deleter("plantings", "Planting"),
+	"delete_planting": deleter("making", "Making"),
 	"add_drop":        actAddDrop,
 	"delete_drop":     deleter("drops", "Drop"),
 }
@@ -537,8 +537,8 @@ var ownedBy = map[string]string{
 	"players":       "id = ? AND user_id = ?",
 	"arcana_prices": "id = ? AND user_id = ?",
 	"orders":        "id = ? AND player_id IN (SELECT id FROM players WHERE user_id = ?)",
-	"seeds":         "id = ? AND player_id IN (SELECT id FROM players WHERE user_id = ?)",
-	"plantings":     "id = ? AND seed_id IN (SELECT id FROM seeds WHERE player_id IN (SELECT id FROM players WHERE user_id = ?))",
+	"base":          "id = ? AND player_id IN (SELECT id FROM players WHERE user_id = ?)",
+	"making":        "id = ? AND base_id IN (SELECT id FROM base WHERE player_id IN (SELECT id FROM players WHERE user_id = ?))",
 	"drops":         "id = ? AND player_id IN (SELECT id FROM players WHERE user_id = ?)",
 	"potions_given": "id = ? AND order_id IN (" + userOrders + ")",
 }
@@ -650,8 +650,8 @@ func actAddOrder(tx *sql.Tx, uid int64, body map[string]any, a *App, skill strin
 	if skill == "herblore" {
 		for _, ing := range potion.Ingredients {
 			if _, err := tx.Exec(
-				"INSERT INTO seeds (player_id, skill, item_key, total_received, created_at) "+
-					"SELECT ?, ?, ?, 0, ? WHERE NOT EXISTS (SELECT 1 FROM seeds WHERE player_id = ? AND skill = ? AND item_key = ?)",
+				"INSERT INTO base (player_id, skill, item_key, total_received, created_at) "+
+					"SELECT ?, ?, ?, 0, ? WHERE NOT EXISTS (SELECT 1 FROM base WHERE player_id = ? AND skill = ? AND item_key = ?)",
 				playerID, skill, ing.ItemKey, now(), playerID, skill, ing.ItemKey,
 			); err != nil {
 				return nil, err
@@ -715,7 +715,7 @@ func actAddSeed(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string
 		return nil, err
 	}
 
-	return inserted(tx.Exec("INSERT INTO seeds (player_id, skill, item_key, total_received, created_at) VALUES (?, ?, ?, ?, ?)", playerID, skill, key, total, now()))
+	return inserted(tx.Exec("INSERT INTO base (player_id, skill, item_key, total_received, created_at) VALUES (?, ?, ?, ?, ?)", playerID, skill, key, total, now()))
 }
 
 func actSetSeedTotal(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
@@ -729,11 +729,11 @@ func actSetSeedTotal(tx *sql.Tx, uid int64, body map[string]any, a *App, skill s
 		return nil, err
 	}
 
-	if err := exists(tx, uid, "seeds", id, "Seeds"); err != nil {
+	if err := exists(tx, uid, "base", id, "Base"); err != nil {
 		return nil, err
 	}
 
-	_, err = tx.Exec("UPDATE seeds SET total_received = ? WHERE id = ?", total, id)
+	_, err = tx.Exec("UPDATE base SET total_received = ? WHERE id = ?", total, id)
 
 	return nil, err
 }
@@ -804,12 +804,12 @@ func actAddPlanting(tx *sql.Tx, uid int64, body map[string]any, a *App, skill st
 	}
 
 	// Harvests can give more seeds, so planting is not limited by the seeds received.
-	if err := exists(tx, uid, "seeds", seedID, "Seeds"); err != nil {
+	if err := exists(tx, uid, "base", seedID, "Base"); err != nil {
 		return nil, err
 	}
 
 	return inserted(tx.Exec(
-		"INSERT INTO plantings (seed_id, planted, harvested, inv_before, inv_after, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+		"INSERT INTO making (base_id, made, harvested, inv_before, inv_after, created_at) VALUES (?, ?, ?, ?, ?, ?)",
 		seedID, count, harvested, before, after, now(),
 	))
 }
@@ -824,7 +824,7 @@ func actSetPlanting(tx *sql.Tx, uid int64, body map[string]any, a *App, skill st
 	var harvested, before, after sql.NullInt64
 
 	if err := tx.QueryRow(
-		"SELECT planted, harvested, inv_before, inv_after FROM plantings WHERE "+ownedBy["plantings"], id, uid,
+		"SELECT made, harvested, inv_before, inv_after FROM making WHERE "+ownedBy["making"], id, uid,
 	).Scan(&count, &harvested, &before, &after); err == sql.ErrNoRows {
 		return nil, userErr("Planting not found")
 	} else if err != nil {
@@ -882,7 +882,7 @@ func actSetPlanting(tx *sql.Tx, uid int64, body map[string]any, a *App, skill st
 	}
 
 	_, err = tx.Exec(
-		"UPDATE plantings SET planted = ?, harvested = ?, inv_before = ?, inv_after = ? WHERE id = ?",
+		"UPDATE making SET made = ?, harvested = ?, inv_before = ?, inv_after = ? WHERE id = ?",
 		count, harvested, before, after, id,
 	)
 

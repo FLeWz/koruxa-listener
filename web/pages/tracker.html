@@ -203,7 +203,7 @@ function renderPlanting(p) {
   tr.append(cell);
 
   const del = el("td");
-  del.append(confirmDelete("this planting", "delete_planting", p.id));
+  del.append(confirmDelete("this making", "delete_planting", p.id));
   tr.append(del);
   return tr;
 }
@@ -211,28 +211,28 @@ function renderPlanting(p) {
 function renderSeed(s) {
   const box = el("div", undefined, "seed");
   const head = el("div", undefined, "row");
-  head.append(el("strong", s.name + " seeds"));
-  head.append(el("span", "received " + fmt(s.total_received) + ", planted " + fmt(s.planted) +
+  head.append(el("strong", s.name + " base"));
+  head.append(el("span", "received " + fmt(s.total_received) + ", made " + fmt(s.planted) +
     ", left " + fmt(s.left) + ", yield " + fmt(s.yield) + (s.pending ? " (" + s.pending + " pending)" : ""), "muted"));
 
   const total = numInput("total", s.total_received);
   total.addEventListener("change", () => act("set_seed_total", {id: s.id, total_received: num(total)}));
   head.append(total);
-  head.append(confirmDelete("these seeds", "delete_seed", s.id));
+  head.append(confirmDelete("this base", "delete_seed", s.id));
   box.append(head);
 
   if (s.plantings.length) {
-    const t = table([["Planted", true], ["Own herbs before"], ["Own herbs after"], ["Yield"], [""]]);
+    const t = table([["Made", true], ["Own herbs before"], ["Own herbs after"], ["Yield"], [""]]);
     s.plantings.forEach((p) => t.tBodies[0].append(renderPlanting(p)));
     box.append(t);
   }
 
   const form = el("div", undefined, "row");
-  const planted = numInput("planted");
+  const planted = numInput("made");
   const before = numInput("own herbs now");
   before.title = "Herbs of this kind already in your inventory, counted before the harvest";
   const harvested = numInput("yield (optional)");
-  form.append(planted, before, harvested, button("Add planting", () => act("add_planting", {
+  form.append(planted, before, harvested, button("Add making", () => act("add_planting", {
     seed_id: s.id, planted: num(planted), inv_before: num(before), yield: num(harvested),
   })));
   box.append(form);
@@ -300,7 +300,7 @@ function renderPool(player) {
 
   box.append(el("h3", "Ingredients"));
   if (player.ingredients.length) {
-    const t = table([["Ingredient"], ["Needed", true], ...(isHerblore ? [["From seeds", true]] : []), ["Provided", true], ["Have", true]]);
+    const t = table([["Ingredient"], ["Needed", true], ...(isHerblore ? [["From base", true]] : []), ["Provided", true], ["Have", true]]);
     for (const i of player.ingredients) {
       const tr = el("tr");
       tr.append(el("td", i.name));
@@ -317,12 +317,12 @@ function renderPool(player) {
   }
 
   if (isHerblore) {
-    box.append(el("h3", "Seeds"));
+    box.append(el("h3", "Base"));
     player.seeds.forEach((s) => box.append(renderSeed(s)));
     const seedForm = el("div", undefined, "row");
     const seedItem = select(ingredientOptions);
     const seedTotal = numInput("total received");
-    seedForm.append(seedItem, seedTotal, button("Add seeds", () => act("add_seed", {
+    seedForm.append(seedItem, seedTotal, button("Add base", () => act("add_seed", {
       player_id: player.id, item_key: seedItem.value, total_received: num(seedTotal),
     })));
     box.append(seedForm);

@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS arcana_prices (
     created_at TEXT NOT NULL
 );
 
--- Potion crafting tracker. Players belong to a user; orders, seeds, plantings, drops and
+-- Potion crafting tracker. Players belong to a user; orders, base, making, drops and
 -- hand-overs belong to a user through their player. Seeds and drops are the player's pool for
 -- a skill, shared by all their orders of it. A name is unique per user.
 CREATE TABLE IF NOT EXISTS players (
@@ -97,8 +97,8 @@ CREATE TABLE IF NOT EXISTS potions_given (
     created_at TEXT NOT NULL
 );
 
--- Seeds received by a player. Planted in segments, see plantings.
-CREATE TABLE IF NOT EXISTS seeds (
+-- Base (seeds) received by a player. Made in segments, see making.
+CREATE TABLE IF NOT EXISTS base (
     id             INTEGER PRIMARY KEY,
     player_id      INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
     skill          TEXT NOT NULL,
@@ -107,10 +107,10 @@ CREATE TABLE IF NOT EXISTS seeds (
     created_at     TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS plantings (
+CREATE TABLE IF NOT EXISTS making (
     id         INTEGER PRIMARY KEY,
-    seed_id    INTEGER NOT NULL REFERENCES seeds(id) ON DELETE CASCADE,
-    planted    INTEGER NOT NULL,
+    base_id    INTEGER NOT NULL REFERENCES base(id) ON DELETE CASCADE,
+    made       INTEGER NOT NULL,
     harvested  INTEGER,                 -- NULL until the yield is known
     inv_before INTEGER,                 -- own herbs in the inventory before the harvest
     inv_after  INTEGER,                 -- ... and after it; both set: harvested = after - before
@@ -155,6 +155,8 @@ class Store:
         with self.connect() as db:
             db.execute("PRAGMA journal_mode = WAL")
 
+        self._rename_base()
+
         with self.connect() as db:
             db.executescript(SCHEMA)
 
@@ -170,11 +172,11 @@ class Store:
 
         # Databases from before the inventory counts have no such columns.
         with self.connect() as db:
-            columns = {row["name"] for row in db.execute("PRAGMA table_info(plantings)")}
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(making)")}
 
             for column in ("inv_before", "inv_after"):
                 if column not in columns:
-                    db.execute(f"ALTER TABLE plantings ADD COLUMN {column} INTEGER")
+                    db.execute(f"ALTER TABLE making ADD COLUMN {column} INTEGER")
 
         self._migrate_owners()
         self._migrate_pool()
@@ -277,22 +279,36 @@ class Store:
         finally:
             db.close()
 
+    # Seeds and plantings are now called base and making (tables and columns). A rename keeps
+    # the rows and the foreign keys. Runs before SCHEMA, which would create empty new tables.
+    def _rename_base(self):
+        with self.connect() as db:
+            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+            if "seeds" in tables and "base" not in tables:
+                db.execute("ALTER TABLE seeds RENAME TO base")
+
+            if "plantings" in tables and "making" not in tables:
+                db.execute("ALTER TABLE plantings RENAME TO making")
+                db.execute("ALTER TABLE making RENAME COLUMN seed_id TO base_id")
+                db.execute("ALTER TABLE making RENAME COLUMN planted TO made")
+
     # Seeds and drops used to belong to one order. They now belong to the player (and skill) so
-    # orders that share an ingredient share it. Every row keeps its id (plantings point at
-    # seeds) and moves to the player and skill of its old order. Runs once: afterwards the
+    # orders that share an ingredient share it. Every row keeps its id (making points at
+    # base) and moves to the player and skill of its old order. Runs once: afterwards the
     # column exists.
     POOL_TABLES = {
-        "seeds": (
-            "CREATE TABLE seeds_new (\n"
+        "base": (
+            "CREATE TABLE base_new (\n"
             " id INTEGER PRIMARY KEY,\n"
             " player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,\n"
             " skill TEXT NOT NULL,\n"
             " item_key TEXT NOT NULL,\n"
             " total_received INTEGER NOT NULL,\n"
             " created_at TEXT NOT NULL)",
-            "INSERT INTO seeds_new (id, player_id, skill, item_key, total_received, created_at) "
+            "INSERT INTO base_new (id, player_id, skill, item_key, total_received, created_at) "
             "SELECT t.id, o.player_id, o.skill, t.item_key, t.total_received, t.created_at "
-            "FROM seeds t JOIN orders o ON o.id = t.order_id",
+            "FROM base t JOIN orders o ON o.id = t.order_id",
         ),
         "drops": (
             "CREATE TABLE drops_new (\n"
