@@ -40,7 +40,9 @@ func waitForSchema(db *sql.DB) error {
 		err := db.QueryRow(`
 			SELECT 1 WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'refresh_jobs')
 			AND EXISTS (SELECT 1 FROM pragma_table_info('players') WHERE name = 'user_id')
-			AND EXISTS (SELECT 1 FROM pragma_table_info('arcana_prices') WHERE name = 'user_id')`).Scan(&found)
+			AND EXISTS (SELECT 1 FROM pragma_table_info('arcana_prices') WHERE name = 'user_id')
+			AND EXISTS (SELECT 1 FROM pragma_table_info('seeds') WHERE name = 'player_id')
+			AND EXISTS (SELECT 1 FROM pragma_table_info('drops') WHERE name = 'player_id')`).Scan(&found)
 		if err == nil {
 			return nil
 		}

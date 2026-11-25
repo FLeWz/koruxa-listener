@@ -6,7 +6,7 @@
 <title>Herblore tracker</title>
 <style>
   body { font: 14px system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; }
-  main { max-width: 1100px; margin: 1.5rem auto 2rem; padding: 0 1rem; }
+  main { max-width: 1500px; margin: 1.5rem auto 2rem; padding: 0 1rem; }
   h1, h2, h3 { font-weight: 600; }
   h3 { margin: 0 0 .5rem; }
   a { color: var(--link); }
@@ -19,6 +19,9 @@
   th, td { text-align: left; padding: .3rem .8rem .3rem 0; border-bottom: 1px solid var(--border); }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin: .6rem 0; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; align-items: start; }
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+  .cols > div { min-width: 0; }
   .card { border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin-bottom: 1.2rem; background: var(--surface); }
   .seed { border-left: 3px solid var(--border-strong); padding-left: .8rem; margin: .8rem 0; }
   .log { max-height: 12rem; overflow-y: auto; margin-bottom: .5rem; }
@@ -48,8 +51,13 @@
   <button id="deletePlayer" class="link">Delete player</button>
 </div>
 
-<div id="request" class="row"></div>
-<div id="orders"></div>
+<div class="cols">
+  <div>
+    <div id="request" class="row"></div>
+    <div id="orders"></div>
+  </div>
+  <div id="pool"></div>
+</div>
 
 </main>
 
@@ -200,7 +208,7 @@ function renderPlanting(p) {
   return tr;
 }
 
-function renderSeed(order, s) {
+function renderSeed(s) {
   const box = el("div", undefined, "seed");
   const head = el("div", undefined, "row");
   head.append(el("strong", s.name + " seeds"));
@@ -254,7 +262,7 @@ function renderOrder(o) {
   // Each entry is a newly handed-over batch; the total is their sum.
   const given = el("div", undefined, "row");
   given.append(el("strong", L.given + ": " + fmt(o.given)));
-  if (o.quantity === 0) given.append(el("span", "can make " + withDouble(o.possible, o.possible_double), "muted"));
+  given.append(el("span", "can make " + withDouble(o.possible, o.possible_double), "muted"));
   given.append(el("span", "left to give " + fmt(o.remaining), (o.remaining !== null && o.remaining < 0 ? "none" : "muted")));
   card.append(given);
 
@@ -281,12 +289,19 @@ function renderOrder(o) {
     card.append(log);
   }
 
-  const ingredientOptions = o.ingredients.map((i) => [i.item_key, i.name]);
+  return card;
+}
 
-  // Needed vs received per ingredient
-  if (o.ingredients.length) {
-    const t = table([["Ingredient"], ["Needed", true], ...(isHerblore ? [["From seeds", true]] : []), ["Provided", true], ["Have", true], [L.things, true]]);
-    for (const i of o.ingredients) {
+// The player's pool for this skill: what the requests need, the seeds and the drops. Requests
+// that share an ingredient draw on the same pool.
+function renderPool(player) {
+  const box = el("div");
+  const ingredientOptions = player.ingredients.map((i) => [i.item_key, i.name]);
+
+  box.append(el("h3", "Ingredients"));
+  if (player.ingredients.length) {
+    const t = table([["Ingredient"], ["Needed", true], ...(isHerblore ? [["From seeds", true]] : []), ["Provided", true], ["Have", true]]);
+    for (const i of player.ingredients) {
       const tr = el("tr");
       tr.append(el("td", i.name));
       tr.append(el("td", fmt(i.needed), "num"));
@@ -294,29 +309,30 @@ function renderOrder(o) {
       tr.append(el("td", fmt(i.from_drops), "num"));
       const short = i.needed !== null && i.have < i.needed;
       tr.append(el("td", fmt(i.have), "num " + (i.needed === null ? "" : (short ? "none" : "ok"))));
-      tr.append(el("td", withDouble(i.potions, i.potions_double), "num"));
       t.tBodies[0].append(tr);
     }
-    card.append(t);
+    box.append(t);
+  } else {
+    box.append(el("p", "Add a request to see its ingredients.", "muted"));
   }
 
   if (isHerblore) {
-    card.append(el("strong", "Seeds"));
-    o.seeds.forEach((s) => card.append(renderSeed(o, s)));
+    box.append(el("h3", "Seeds"));
+    player.seeds.forEach((s) => box.append(renderSeed(s)));
     const seedForm = el("div", undefined, "row");
     const seedItem = select(ingredientOptions);
     const seedTotal = numInput("total received");
     seedForm.append(seedItem, seedTotal, button("Add seeds", () => act("add_seed", {
-      order_id: o.id, item_key: seedItem.value, total_received: num(seedTotal),
+      player_id: player.id, item_key: seedItem.value, total_received: num(seedTotal),
     })));
-    card.append(seedForm);
+    box.append(seedForm);
   }
 
-  card.append(el("strong", L.drops));
-  if (o.drops.length) {
+  box.append(el("h3", L.drops));
+  if (player.drops.length) {
     const t = table([["Item"], ["Qty", true], ["Source"], ["Unit price", true], [""]]);
-    o.drops.forEach((d) => t.tBodies[0].append(renderDrop(d)));
-    card.append(t);
+    player.drops.forEach((d) => t.tBodies[0].append(renderDrop(d)));
+    box.append(t);
   }
   const dropForm = el("div", undefined, "row");
   const dropItem = select(ingredientOptions);
@@ -324,10 +340,10 @@ function renderOrder(o) {
   const dropSource = select([["given", "given by player"], ["bought", "bought"]]);
   const dropPrice = numInput("unit price (bought)");
   dropForm.append(dropItem, dropQty, dropSource, dropPrice, button(L.addDrops, () => act("add_drop", {
-    order_id: o.id, item_key: dropItem.value, quantity: num(dropQty), source: dropSource.value, price: num(dropPrice),
+    player_id: player.id, item_key: dropItem.value, quantity: num(dropQty), source: dropSource.value, price: num(dropPrice),
   })));
-  card.append(dropForm);
-  return card;
+  box.append(dropForm);
+  return box;
 }
 
 function render() {
@@ -347,6 +363,7 @@ function render() {
   const orders = $("orders");
   request.replaceChildren();
   orders.replaceChildren();
+  $("pool").replaceChildren();
 
   const player = data.players.find((p) => p.id === playerId);
   if (!player) {
@@ -366,6 +383,7 @@ function render() {
 
   if (!player.orders.length) orders.append(el("p", "No requests yet.", "muted"));
   player.orders.forEach((o) => orders.append(renderOrder(o)));
+  $("pool").append(renderPool(player));
 }
 
 $("player").addEventListener("change", () => { playerId = Number($("player").value); render(); });

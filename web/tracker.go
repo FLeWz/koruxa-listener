@@ -68,15 +68,14 @@ type Potion struct {
 	Ingredients []PotionIngredient `json:"ingredients"`
 }
 
-type OrderIngredient struct {
-	PotionIngredient
-	Needed    *float64 `json:"needed"` // nil for unlimited requests
+// PoolIngredient is one ingredient of a player's pool, shared by all their requests of a skill.
+type PoolIngredient struct {
+	ItemKey   string   `json:"item_key"`
+	Name      string   `json:"name"`
+	Needed    *float64 `json:"needed"` // nil when an unlimited request uses it
 	FromSeeds int64    `json:"from_seeds"`
 	FromDrops int64    `json:"from_drops"`
 	Have      int64    `json:"have"`
-	Potions   *int64   `json:"potions"`
-	// Potions with the double drop chance counted: on average each craft gives that much more.
-	PotionsDouble *int64 `json:"potions_double"`
 }
 
 type Planting struct {
@@ -123,17 +122,19 @@ type Order struct {
 	Gives     []Give `json:"gives"`
 	Possible  *int64 `json:"possible"`
 	// Possible with the double drop chance counted.
-	PossibleDouble *int64            `json:"possible_double"`
-	Remaining      *int64            `json:"remaining"`
-	Ingredients    []OrderIngredient `json:"ingredients"`
-	Seeds          []Seed            `json:"seeds"`
-	Drops          []Drop            `json:"drops"`
+	PossibleDouble *int64 `json:"possible_double"`
+	Remaining      *int64 `json:"remaining"`
 }
 
+// Ingredients, seeds and drops belong to the player, not to a request: requests that share an
+// ingredient draw on the same pool.
 type PlayerOut struct {
-	ID     int64   `json:"id"`
-	Name   string  `json:"name"`
-	Orders []Order `json:"orders"`
+	ID          int64            `json:"id"`
+	Name        string           `json:"name"`
+	Orders      []Order          `json:"orders"`
+	Ingredients []PoolIngredient `json:"ingredients"`
+	Seeds       []Seed           `json:"seeds"`
+	Drops       []Drop           `json:"drops"`
 }
 
 type TrackerView struct {
@@ -204,7 +205,7 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 	}
 
 	for rows.Next() {
-		p := PlayerOut{Orders: []Order{}}
+		p := PlayerOut{Orders: []Order{}, Ingredients: []PoolIngredient{}, Seeds: []Seed{}, Drops: []Drop{}}
 		if err := rows.Scan(&p.ID, &p.Name); err != nil {
 			rows.Close()
 			return nil, err
@@ -259,16 +260,16 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 
 	seeds := map[int64][]Seed{}
 
-	rows, err = a.db.Query("SELECT id, order_id, item_key, total_received FROM seeds ORDER BY id")
+	rows, err = a.db.Query("SELECT id, player_id, item_key, total_received FROM seeds WHERE skill = ? ORDER BY id", skill)
 	if err != nil {
 		return nil, err
 	}
 
 	for rows.Next() {
-		var orderID int64
+		var playerID int64
 		var s Seed
 
-		if err := rows.Scan(&s.ID, &orderID, &s.ItemKey, &s.TotalReceived); err != nil {
+		if err := rows.Scan(&s.ID, &playerID, &s.ItemKey, &s.TotalReceived); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -292,24 +293,24 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 
 		// Harvests can give more seeds, so more can be planted than were received.
 		s.Left = max(s.TotalReceived-s.Planted, 0)
-		seeds[orderID] = append(seeds[orderID], s)
+		seeds[playerID] = append(seeds[playerID], s)
 	}
 
 	rows.Close()
 
 	drops := map[int64][]Drop{}
 
-	rows, err = a.db.Query("SELECT id, order_id, item_key, quantity, source, price FROM drops ORDER BY id")
+	rows, err = a.db.Query("SELECT id, player_id, item_key, quantity, source, price FROM drops WHERE skill = ? ORDER BY id", skill)
 	if err != nil {
 		return nil, err
 	}
 
 	for rows.Next() {
-		var orderID int64
+		var playerID int64
 		var d Drop
 		var price sql.NullFloat64
 
-		if err := rows.Scan(&d.ID, &orderID, &d.ItemKey, &d.Quantity, &d.Source, &price); err != nil {
+		if err := rows.Scan(&d.ID, &playerID, &d.ItemKey, &d.Quantity, &d.Source, &price); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -320,7 +321,7 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 			d.Price = ptr(price.Float64)
 		}
 
-		drops[orderID] = append(drops[orderID], d)
+		drops[playerID] = append(drops[playerID], d)
 	}
 
 	rows.Close()
@@ -347,97 +348,125 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 	rows.Close()
 
 	ordersByPlayer := map[int64][]Order{}
-
-	for _, o := range orders {
-		potion, known := byKey[o.potionKey]
-
-		out := Order{
-			ID:          o.id,
-			PotionKey:   o.potionKey,
-			Potion:      itemName(o.potionKey),
-			Quantity:    o.quantity,
-			Gives:       gives[o.id],
-			Ingredients: []OrderIngredient{},
-			Seeds:       seeds[o.id],
-			Drops:       drops[o.id],
-		}
-
-		if known {
-			out.Potion = potion.Label
-		}
-
-		if out.Gives == nil {
-			out.Gives = []Give{}
-		}
-
-		if out.Seeds == nil {
-			out.Seeds = []Seed{}
-		}
-
-		if out.Drops == nil {
-			out.Drops = []Drop{}
-		}
-
-		for _, g := range out.Gives {
-			out.Given += g.Quantity
-		}
-
-		// An order counts items, the ingredients are per craft, and a craft can give several
-		// items (a crystal dust recipe gives 2 or 4).
-		amount := math.Max(potion.Amount, 1)
-
-		// Per ingredient: how many are needed and how many we have (herb yield + drops).
-		for _, ing := range potion.Ingredients {
-			oi := OrderIngredient{PotionIngredient: ing}
-
-			for _, s := range out.Seeds {
-				if s.ItemKey == ing.ItemKey {
-					oi.FromSeeds += s.Yield
-				}
-			}
-
-			for _, d := range out.Drops {
-				if d.ItemKey == ing.ItemKey {
-					oi.FromDrops += d.Quantity
-				}
-			}
-
-			oi.Have = oi.FromSeeds + oi.FromDrops
-
-			// Unlimited requests (quantity 0) have no fixed need.
-			if o.quantity > 0 {
-				oi.Needed = ptr(ing.Quantity * math.Ceil(float64(o.quantity)/amount))
-			}
-
-			if ing.Quantity > 0 {
-				n := int64(math.Floor(float64(oi.Have)/ing.Quantity) * amount)
-				oi.Potions = &n
-
-				d := int64(math.Floor(float64(n) * (1 + potion.YieldChance/100)))
-				oi.PotionsDouble = &d
-			}
-
-			out.Ingredients = append(out.Ingredients, oi)
-
-			// Output follows from the scarcest ingredient.
-			if oi.Potions != nil && (out.Possible == nil || *oi.Potions < *out.Possible) {
-				out.Possible = oi.Potions
-				out.PossibleDouble = oi.PotionsDouble
-			}
-		}
-
-		if o.quantity > 0 {
-			r := o.quantity - out.Given
-			out.Remaining = &r
-		} else if out.Possible != nil {
-			r := *out.Possible - out.Given
-			out.Remaining = &r
-		}
-
-		ordersByPlayer[o.playerID] = append(ordersByPlayer[o.playerID], out)
-	}
-
 	for _, p := range players {
+		if list := seeds[p.ID]; list != nil {
+			p.Seeds = list
+		}
+
+		if list := drops[p.ID]; list != nil {
+			p.Drops = list
+		}
+
+		// Ingredient pool: every ingredient of the player's requests once, in first-seen order.
+		pool := map[string]*PoolIngredient{}
+		unlimited := map[string]bool{}
+
+		for _, o := range orders {
+			potion, known := byKey[o.potionKey]
+			if o.playerID != p.ID || !known {
+				continue
+			}
+
+			amount := math.Max(potion.Amount, 1)
+
+			for _, ing := range potion.Ingredients {
+				pi := pool[ing.ItemKey]
+
+				if pi == nil {
+					pi = &PoolIngredient{ItemKey: ing.ItemKey, Name: ing.Name, Needed: ptr(0.0)}
+					pool[ing.ItemKey] = pi
+					p.Ingredients = append(p.Ingredients, PoolIngredient{ItemKey: ing.ItemKey})
+				}
+
+				// Unlimited requests (quantity 0) have no fixed need.
+				if o.quantity == 0 {
+					unlimited[ing.ItemKey] = true
+				} else {
+					*pi.Needed += ing.Quantity * math.Ceil(float64(o.quantity)/amount)
+				}
+			}
+		}
+
+		for i := range p.Ingredients {
+			pi := pool[p.Ingredients[i].ItemKey]
+
+			for _, s := range p.Seeds {
+				if s.ItemKey == pi.ItemKey {
+					pi.FromSeeds += s.Yield
+				}
+			}
+
+			for _, d := range p.Drops {
+				if d.ItemKey == pi.ItemKey {
+					pi.FromDrops += d.Quantity
+				}
+			}
+
+			pi.Have = pi.FromSeeds + pi.FromDrops
+
+			if unlimited[pi.ItemKey] {
+				pi.Needed = nil
+			}
+
+			p.Ingredients[i] = *pi
+		}
+
+		for _, o := range orders {
+			if o.playerID != p.ID {
+				continue
+			}
+
+			potion, known := byKey[o.potionKey]
+
+			out := Order{
+				ID:        o.id,
+				PotionKey: o.potionKey,
+				Potion:    itemName(o.potionKey),
+				Quantity:  o.quantity,
+				Gives:     gives[o.id],
+			}
+
+			if known {
+				out.Potion = potion.Label
+			}
+
+			if out.Gives == nil {
+				out.Gives = []Give{}
+			}
+
+			for _, g := range out.Gives {
+				out.Given += g.Quantity
+			}
+
+			// An order counts items, the ingredients are per craft, and a craft can give several
+			// items (a crystal dust recipe gives 2 or 4). Output follows from the scarcest
+			// ingredient of the pool; requests that share an ingredient each see all of it.
+			amount := math.Max(potion.Amount, 1)
+
+			for _, ing := range potion.Ingredients {
+				if ing.Quantity <= 0 {
+					continue
+				}
+
+				n := int64(math.Floor(float64(pool[ing.ItemKey].Have)/ing.Quantity) * amount)
+
+				if out.Possible == nil || n < *out.Possible {
+					d := int64(math.Floor(float64(n) * (1 + potion.YieldChance/100)))
+					out.Possible, out.PossibleDouble = &n, &d
+				}
+			}
+
+			if o.quantity > 0 {
+				r := o.quantity - out.Given
+				out.Remaining = &r
+			} else if out.Possible != nil {
+				r := *out.Possible - out.Given
+				out.Remaining = &r
+			}
+
+			ordersByPlayer[p.ID] = append(ordersByPlayer[p.ID], out)
+		}
+
 		if list := ordersByPlayer[p.ID]; list != nil {
 			p.Orders = list
 		}
@@ -508,9 +537,9 @@ var ownedBy = map[string]string{
 	"players":       "id = ? AND user_id = ?",
 	"arcana_prices": "id = ? AND user_id = ?",
 	"orders":        "id = ? AND player_id IN (SELECT id FROM players WHERE user_id = ?)",
-	"seeds":         "id = ? AND order_id IN (" + userOrders + ")",
-	"plantings":     "id = ? AND seed_id IN (SELECT id FROM seeds WHERE order_id IN (" + userOrders + "))",
-	"drops":         "id = ? AND order_id IN (" + userOrders + ")",
+	"seeds":         "id = ? AND player_id IN (SELECT id FROM players WHERE user_id = ?)",
+	"plantings":     "id = ? AND seed_id IN (SELECT id FROM seeds WHERE player_id IN (SELECT id FROM players WHERE user_id = ?))",
+	"drops":         "id = ? AND player_id IN (SELECT id FROM players WHERE user_id = ?)",
 	"potions_given": "id = ? AND order_id IN (" + userOrders + ")",
 }
 
@@ -604,16 +633,30 @@ func actAddOrder(tx *sql.Tx, uid int64, body map[string]any, a *App, skill strin
 		return nil, err
 	}
 
-	known := false
+	var potion *Potion
 
-	for _, p := range potions {
-		if p.Key == potionKey {
-			known = true
+	for i := range potions {
+		if potions[i].Key == potionKey {
+			potion = &potions[i]
 		}
 	}
 
-	if !known {
+	if potion == nil {
 		return nil, userErr("Unknown recipe. Refresh the recipes first.")
+	}
+
+	// Herblore: every ingredient gets a seeds entry, so a new ingredient shows up in the
+	// seeds section too. Entries that exist already are kept; unused ones can be deleted.
+	if skill == "herblore" {
+		for _, ing := range potion.Ingredients {
+			if _, err := tx.Exec(
+				"INSERT INTO seeds (player_id, skill, item_key, total_received, created_at) "+
+					"SELECT ?, ?, ?, 0, ? WHERE NOT EXISTS (SELECT 1 FROM seeds WHERE player_id = ? AND skill = ? AND item_key = ?)",
+				playerID, skill, ing.ItemKey, now(), playerID, skill, ing.ItemKey,
+			); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return inserted(tx.Exec(
@@ -653,12 +696,12 @@ func actAddGiven(tx *sql.Tx, uid int64, body map[string]any, a *App, skill strin
 }
 
 func actAddSeed(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
-	orderID, err := wholeNumber(body["order_id"], "Request", 1)
+	playerID, err := wholeNumber(body["player_id"], "Player", 1)
 	if err != nil {
 		return nil, err
 	}
 
-	total, err := wholeNumber(body["total_received"], "Total received", 1)
+	total, err := wholeNumber(body["total_received"], "Total received", 0)
 	if err != nil {
 		return nil, err
 	}
@@ -668,11 +711,11 @@ func actAddSeed(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string
 		return nil, err
 	}
 
-	if err := exists(tx, uid, "orders", orderID, "Request"); err != nil {
+	if err := exists(tx, uid, "players", playerID, "Player"); err != nil {
 		return nil, err
 	}
 
-	return inserted(tx.Exec("INSERT INTO seeds (order_id, item_key, total_received, created_at) VALUES (?, ?, ?, ?)", orderID, key, total, now()))
+	return inserted(tx.Exec("INSERT INTO seeds (player_id, skill, item_key, total_received, created_at) VALUES (?, ?, ?, ?, ?)", playerID, skill, key, total, now()))
 }
 
 func actSetSeedTotal(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
@@ -681,7 +724,7 @@ func actSetSeedTotal(tx *sql.Tx, uid int64, body map[string]any, a *App, skill s
 		return nil, err
 	}
 
-	total, err := wholeNumber(body["total_received"], "Total received", 1)
+	total, err := wholeNumber(body["total_received"], "Total received", 0)
 	if err != nil {
 		return nil, err
 	}
@@ -847,7 +890,7 @@ func actSetPlanting(tx *sql.Tx, uid int64, body map[string]any, a *App, skill st
 }
 
 func actAddDrop(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string) (any, error) {
-	orderID, err := wholeNumber(body["order_id"], "Request", 1)
+	playerID, err := wholeNumber(body["player_id"], "Player", 1)
 	if err != nil {
 		return nil, err
 	}
@@ -878,9 +921,9 @@ func actAddDrop(tx *sql.Tx, uid int64, body map[string]any, a *App, skill string
 		price = sql.NullFloat64{Float64: f, Valid: true}
 	}
 
-	if err := exists(tx, uid, "orders", orderID, "Request"); err != nil {
+	if err := exists(tx, uid, "players", playerID, "Player"); err != nil {
 		return nil, err
 	}
 
-	return inserted(tx.Exec("INSERT INTO drops (order_id, item_key, quantity, source, price, created_at) VALUES (?, ?, ?, ?, ?, ?)", orderID, key, quantity, source, price, now()))
+	return inserted(tx.Exec("INSERT INTO drops (player_id, skill, item_key, quantity, source, price, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", playerID, skill, key, quantity, source, price, now()))
 }

@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS arcana_prices (
 );
 
 -- Potion crafting tracker. Players belong to a user; orders, seeds, plantings, drops and
--- hand-overs belong to a user through their player. A name is unique per user.
+-- hand-overs belong to a user through their player. Seeds and drops are the player's pool for
+-- a skill, shared by all their orders of it. A name is unique per user.
 CREATE TABLE IF NOT EXISTS players (
     id         INTEGER PRIMARY KEY,
     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -96,10 +97,11 @@ CREATE TABLE IF NOT EXISTS potions_given (
     created_at TEXT NOT NULL
 );
 
--- Seeds received for an order. Planted in segments, see plantings.
+-- Seeds received by a player. Planted in segments, see plantings.
 CREATE TABLE IF NOT EXISTS seeds (
     id             INTEGER PRIMARY KEY,
-    order_id       INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    player_id      INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    skill          TEXT NOT NULL,
     item_key       TEXT NOT NULL,       -- ingredient (herb) the seeds grow
     total_received INTEGER NOT NULL,
     created_at     TEXT NOT NULL
@@ -118,7 +120,8 @@ CREATE TABLE IF NOT EXISTS plantings (
 -- Monster drop ingredients given by the player or bought by us.
 CREATE TABLE IF NOT EXISTS drops (
     id         INTEGER PRIMARY KEY,
-    order_id   INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    player_id  INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    skill      TEXT NOT NULL,
     item_key   TEXT NOT NULL,
     quantity   INTEGER NOT NULL,
     source     TEXT NOT NULL CHECK (source IN ('given', 'bought')),
@@ -174,6 +177,7 @@ class Store:
                     db.execute(f"ALTER TABLE plantings ADD COLUMN {column} INTEGER")
 
         self._migrate_owners()
+        self._migrate_pool()
 
         if legacy_json is not None:
             self._migrate_json(legacy_json)
@@ -270,6 +274,85 @@ class Store:
                 ", ".join(f"{rows[t]} row(s) of {t}" for t in todo),
                 owner_id,
             )
+        finally:
+            db.close()
+
+    # Seeds and drops used to belong to one order. They now belong to the player (and skill) so
+    # orders that share an ingredient share it. Every row keeps its id (plantings point at
+    # seeds) and moves to the player and skill of its old order. Runs once: afterwards the
+    # column exists.
+    POOL_TABLES = {
+        "seeds": (
+            "CREATE TABLE seeds_new (\n"
+            " id INTEGER PRIMARY KEY,\n"
+            " player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,\n"
+            " skill TEXT NOT NULL,\n"
+            " item_key TEXT NOT NULL,\n"
+            " total_received INTEGER NOT NULL,\n"
+            " created_at TEXT NOT NULL)",
+            "INSERT INTO seeds_new (id, player_id, skill, item_key, total_received, created_at) "
+            "SELECT t.id, o.player_id, o.skill, t.item_key, t.total_received, t.created_at "
+            "FROM seeds t JOIN orders o ON o.id = t.order_id",
+        ),
+        "drops": (
+            "CREATE TABLE drops_new (\n"
+            " id INTEGER PRIMARY KEY,\n"
+            " player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,\n"
+            " skill TEXT NOT NULL,\n"
+            " item_key TEXT NOT NULL,\n"
+            " quantity INTEGER NOT NULL,\n"
+            " source TEXT NOT NULL CHECK (source IN ('given', 'bought')),\n"
+            " price REAL,\n"
+            " created_at TEXT NOT NULL)",
+            "INSERT INTO drops_new (id, player_id, skill, item_key, quantity, source, price, created_at) "
+            "SELECT t.id, o.player_id, o.skill, t.item_key, t.quantity, t.source, t.price, t.created_at "
+            "FROM drops t JOIN orders o ON o.id = t.order_id",
+        ),
+    }
+
+    def _migrate_pool(self):
+        db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+
+        try:
+            todo = [
+                table
+                for table in self.POOL_TABLES
+                if "player_id" not in {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+            ]
+
+            if not todo:
+                return
+
+            before = {table: db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in todo}
+
+            db.execute("PRAGMA foreign_keys = OFF")
+            db.execute("BEGIN IMMEDIATE")
+
+            try:
+                for table in todo:
+                    create, copy = self.POOL_TABLES[table]
+
+                    db.execute(create)
+                    db.execute(copy)
+
+                    # No row may be lost on the way.
+                    if db.execute(f"SELECT COUNT(*) FROM {table}_new").fetchone()[0] != before[table]:
+                        raise RuntimeError(f"Pool migration would lose rows of {table}")
+
+                    db.execute(f"DROP TABLE {table}")
+                    db.execute(f"ALTER TABLE {table}_new RENAME TO {table}")
+
+                broken = db.execute("PRAGMA foreign_key_check").fetchall()
+
+                if broken:
+                    raise RuntimeError(f"Pool migration left {len(broken)} broken foreign key(s)")
+
+                db.execute("COMMIT")
+            except BaseException:
+                db.execute("ROLLBACK")
+                raise
+
+            logger.info("Seeds and drops are now per player: %s", ", ".join(f"{before[t]} row(s) of {t}" for t in todo))
         finally:
             db.close()
 
