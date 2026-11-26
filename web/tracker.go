@@ -76,6 +76,7 @@ type PoolIngredient struct {
 	FromSeeds int64    `json:"from_seeds"`
 	FromDrops int64    `json:"from_drops"`
 	Have      int64    `json:"have"`
+	Used      int64    `json:"used"` // consumed by the potions already given, all requests together
 }
 
 type Planting struct {
@@ -369,6 +370,11 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 
 			amount := math.Max(potion.Amount, 1)
 
+			var given int64
+			for _, g := range gives[o.id] {
+				given += g.Quantity
+			}
+
 			for _, ing := range potion.Ingredients {
 				pi := pool[ing.ItemKey]
 
@@ -377,6 +383,8 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 					pool[ing.ItemKey] = pi
 					p.Ingredients = append(p.Ingredients, PoolIngredient{ItemKey: ing.ItemKey})
 				}
+
+				pi.Used += int64(ing.Quantity * math.Ceil(float64(given)/amount))
 
 				// Unlimited requests (quantity 0) have no fixed need.
 				if o.quantity == 0 {
@@ -439,8 +447,9 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 			}
 
 			// An order counts items, the ingredients are per craft, and a craft can give several
-			// items (a crystal dust recipe gives 2 or 4). Output follows from the scarcest
-			// ingredient of the pool; requests that share an ingredient each see all of it.
+			// items (a crystal dust recipe gives 2 or 4). What can still be made follows from the
+			// scarcest ingredient of what is left in the pool (obtained minus used by every
+			// request); possible is that plus what was already given.
 			amount := math.Max(potion.Amount, 1)
 
 			for _, ing := range potion.Ingredients {
@@ -448,7 +457,8 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 					continue
 				}
 
-				n := int64(math.Floor(float64(pool[ing.ItemKey].Have)/ing.Quantity) * amount)
+				left := max(pool[ing.ItemKey].Have-pool[ing.ItemKey].Used, 0)
+				n := out.Given + int64(math.Floor(float64(left)/ing.Quantity)*amount)
 
 				if out.Possible == nil || n < *out.Possible {
 					d := int64(math.Floor(float64(n) * (1 + potion.YieldChance/100)))

@@ -300,7 +300,7 @@ function renderPool(player) {
 
   box.append(el("h3", "Ingredients"));
   if (player.ingredients.length) {
-    const t = table([["Ingredient"], ["Needed", true], ...(isHerblore ? [["From base", true]] : []), ["Provided", true], ["Have", true]]);
+    const t = table([["Ingredient"], ["Needed", true], ...(isHerblore ? [["From base", true]] : []), ["Provided", true], ["Have", true], ["Used", true]]);
     for (const i of player.ingredients) {
       const tr = el("tr");
       tr.append(el("td", i.name));
@@ -309,6 +309,7 @@ function renderPool(player) {
       tr.append(el("td", fmt(i.from_drops), "num"));
       const short = i.needed !== null && i.have < i.needed;
       tr.append(el("td", fmt(i.have), "num " + (i.needed === null ? "" : (short ? "none" : "ok"))));
+      tr.append(el("td", fmt(i.used), "num"));
       t.tBodies[0].append(tr);
     }
     box.append(t);
