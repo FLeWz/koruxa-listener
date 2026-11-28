@@ -125,6 +125,15 @@ type Order struct {
 	// Possible with the double drop chance counted.
 	PossibleDouble *int64 `json:"possible_double"`
 	Remaining      *int64 `json:"remaining"`
+	// What the recipe needs: per craft, and for the whole request (nil when unlimited).
+	Ingredients []RecipeIngredient `json:"ingredients"`
+}
+
+type RecipeIngredient struct {
+	ItemKey  string   `json:"item_key"`
+	Name     string   `json:"name"`
+	Quantity float64  `json:"quantity"`
+	Needed   *float64 `json:"needed"`
 }
 
 // Ingredients, seeds and drops belong to the player, not to a request: requests that share an
@@ -432,6 +441,8 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 				Potion:    itemName(o.potionKey),
 				Quantity:  o.quantity,
 				Gives:     gives[o.id],
+
+				Ingredients: []RecipeIngredient{},
 			}
 
 			if known {
@@ -453,6 +464,14 @@ func (a *App) trackerView(uid int64, skill string) (*TrackerView, error) {
 			amount := math.Max(potion.Amount, 1)
 
 			for _, ing := range potion.Ingredients {
+				ri := RecipeIngredient{ItemKey: ing.ItemKey, Name: ing.Name, Quantity: ing.Quantity}
+
+				if o.quantity > 0 {
+					ri.Needed = ptr(ing.Quantity * math.Ceil(float64(o.quantity)/amount))
+				}
+
+				out.Ingredients = append(out.Ingredients, ri)
+
 				if ing.Quantity <= 0 {
 					continue
 				}

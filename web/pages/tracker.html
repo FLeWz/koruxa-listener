@@ -266,6 +266,16 @@ function renderOrder(o) {
   given.append(el("span", "left to give " + fmt(o.remaining), (o.remaining !== null && o.remaining < 0 ? "none" : "muted")));
   card.append(given);
 
+  if (o.ingredients.length) {
+    const t = table([["Ingredient"], ["Per craft", true], ["Needed", true]]);
+    for (const i of o.ingredients) {
+      const tr = el("tr");
+      tr.append(el("td", i.name), el("td", fmt(i.quantity), "num"), el("td", fmt(i.needed), "num"));
+      t.tBodies[0].append(tr);
+    }
+    card.append(t);
+  }
+
   const giveForm = el("div", undefined, "row");
   const giveQty = numInput(L.placeholder);
   giveQty.style.width = "9rem";
@@ -294,6 +304,40 @@ function renderOrder(o) {
 
 // The player's pool for this skill: what the requests need, the seeds and the drops. Requests
 // that share an ingredient draw on the same pool.
+// Squash: one row per item, quantities and yields summed. Kept in localStorage per section.
+function squashToggle(name, rerender) {
+  const label = el("label", undefined, "muted");
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = localStorage.getItem("squash_" + name) === "1";
+  box.addEventListener("change", () => { localStorage.setItem("squash_" + name, box.checked ? "1" : "0"); rerender(); });
+  label.append(box, " squash");
+  return [label, box.checked];
+}
+
+function squashSeeds(seeds) {
+  const by = new Map();
+  for (const s of seeds) {
+    const g = by.get(s.item_key) || {name: s.name, total_received: 0, planted: 0, left: 0, yield: 0, pending: 0};
+    g.total_received += s.total_received; g.planted += s.planted; g.left += s.left; g.yield += s.yield; g.pending += s.pending;
+    by.set(s.item_key, g);
+  }
+  return [...by.values()];
+}
+
+function squashDrops(drops) {
+  const by = new Map();
+  for (const d of drops) {
+    const k = d.item_key + "|" + d.source;
+    const g = by.get(k) || {name: d.name, source: d.source, quantity: 0, paid: 0, priced: 0};
+    g.quantity += d.quantity;
+    if (d.price !== null) { g.paid += d.price * d.quantity; g.priced += d.quantity; }
+    by.set(k, g);
+  }
+  // Unit price is the average over the entries that have one.
+  return [...by.values()].map((g) => ({...g, price: g.priced ? g.paid / g.priced : null}));
+}
+
 function renderPool(player) {
   const box = el("div");
   const ingredientOptions = player.ingredients.map((i) => [i.item_key, i.name]);
@@ -318,8 +362,22 @@ function renderPool(player) {
   }
 
   if (isHerblore) {
-    box.append(el("h3", "Base"));
-    player.seeds.forEach((s) => box.append(renderSeed(s)));
+    const [seedSquash, seedOn] = squashToggle("base", render);
+    const seedHead = el("div", undefined, "row");
+    seedHead.append(el("h3", "Base"), seedSquash);
+    box.append(seedHead);
+    if (seedOn) {
+      const t = table([["Item"], ["Received", true], ["Made", true], ["Left", true], ["Yield", true]]);
+      for (const g of squashSeeds(player.seeds)) {
+        const tr = el("tr");
+        tr.append(el("td", g.name), el("td", fmt(g.total_received), "num"), el("td", fmt(g.planted), "num"),
+          el("td", fmt(g.left), "num"), el("td", fmt(g.yield) + (g.pending ? " (" + g.pending + " pending)" : ""), "num"));
+        t.tBodies[0].append(tr);
+      }
+      box.append(t);
+    } else {
+      player.seeds.forEach((s) => box.append(renderSeed(s)));
+    }
     const seedForm = el("div", undefined, "row");
     const seedItem = select(ingredientOptions);
     const seedTotal = numInput("total received");
@@ -329,10 +387,22 @@ function renderPool(player) {
     box.append(seedForm);
   }
 
-  box.append(el("h3", L.drops));
+  const [dropSquash, dropOn] = squashToggle("drops", render);
+  const dropHead = el("div", undefined, "row");
+  dropHead.append(el("h3", L.drops), dropSquash);
+  box.append(dropHead);
   if (player.drops.length) {
     const t = table([["Item"], ["Qty", true], ["Source"], ["Unit price", true], [""]]);
-    player.drops.forEach((d) => t.tBodies[0].append(renderDrop(d)));
+    if (dropOn) {
+      for (const g of squashDrops(player.drops)) {
+        const tr = el("tr");
+        tr.append(el("td", g.name), el("td", fmt(g.quantity), "num"), el("td", g.source),
+          el("td", g.price === null ? "-" : fmt(Math.round(g.price * 100) / 100), "num"), el("td"));
+        t.tBodies[0].append(tr);
+      }
+    } else {
+      player.drops.forEach((d) => t.tBodies[0].append(renderDrop(d)));
+    }
     box.append(t);
   }
   const dropForm = el("div", undefined, "row");
